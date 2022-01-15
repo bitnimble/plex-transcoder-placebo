@@ -300,6 +300,7 @@ OBJS-$(CONFIG_KERNDEINT_FILTER)              += vf_kerndeint.o
 OBJS-$(CONFIG_LAGFUN_FILTER)                 += vf_lagfun.o
 OBJS-$(CONFIG_LENSCORRECTION_FILTER)         += vf_lenscorrection.o
 OBJS-$(CONFIG_LENSFUN_FILTER)                += vf_lensfun.o
+OBJS-$(CONFIG_LIBPLACEBO_FILTER)             += vf_libplacebo.o vulkan.o
 OBJS-$(CONFIG_LIBVMAF_FILTER)                += vf_libvmaf.o framesync.o
 OBJS-$(CONFIG_LIMITER_FILTER)                += vf_limiter.o
 OBJS-$(CONFIG_LOOP_FILTER)                   += f_loop.o
