@@ -342,6 +342,8 @@ int ff_mp4_read_dec_config_descr(AVFormatContext *fc, AVStream *st, AVIOContext 
     codec_id= ff_codec_get_id(ff_mp4_obj_type, object_type_id);
     if (codec_id)
         st->codecpar->codec_id = codec_id;
+    if (object_type_id == 0x6B) // This can be either MP3 or MP2; let probe_codec decide
+        ffstream(st)->request_probe = 5;
     av_log(fc, AV_LOG_TRACE, "esds object type id 0x%02x\n", object_type_id);
     len = ff_mp4_read_descr(fc, pb, &tag);
     if (tag == MP4DecSpecificDescrTag) {

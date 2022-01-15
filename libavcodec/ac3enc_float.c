@@ -30,7 +30,9 @@
 #include "internal.h"
 #include "audiodsp.h"
 #include "ac3enc.h"
+#if CONFIG_EAC3_ENCODER
 #include "eac3enc.h"
+#endif
 #include "kbdwin.h"
 
 

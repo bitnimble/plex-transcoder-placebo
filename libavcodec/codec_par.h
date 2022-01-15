@@ -180,6 +180,10 @@ typedef struct AVCodecParameters {
      */
     int      frame_size;
 
+//PLEX
+    int separate_fields;
+//PLEX
+
     /**
      * Audio only. The amount of padding (in samples) inserted by the encoder at
      * the beginning of the audio. I.e. this number of leading decoded samples

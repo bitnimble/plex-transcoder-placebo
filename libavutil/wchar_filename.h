@@ -40,6 +40,24 @@ static inline int utf8towchar(const char *filename_utf8, wchar_t **filename_w)
     MultiByteToWideChar(CP_UTF8, 0, filename_utf8, -1, *filename_w, num_chars);
     return 0;
 }
+
+av_warn_unused_result
+static inline int wchartoutf8(const wchar_t *filename_w, char **filename_utf8)
+{
+    int num_chars;
+    num_chars = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, filename_w, -1, NULL, 0, NULL, NULL);
+    if (num_chars <= 0) {
+        *filename_utf8 = NULL;
+        return 0;
+    }
+    *filename_utf8 = av_mallocz(num_chars);
+    if (!*filename_utf8) {
+        errno = ENOMEM;
+        return -1;
+    }
+    WideCharToMultiByte(CP_UTF8, 0, filename_w, -1, *filename_utf8, num_chars, NULL, NULL);
+    return 0;
+}
 #endif
 
 #endif /* AVUTIL_WCHAR_FILENAME_H */

@@ -75,7 +75,12 @@ void ff_dca_downmix_to_stereo_float(AVFloatDSPContext *fdsp, float **samples,
 static inline int ff_dca_check_crc(AVCodecContext *avctx, GetBitContext *s,
                                    int p1, int p2)
 {
-    DCAContext *dca = avctx->priv_data;
+    DCAContext *dca;
+
+    if (!avctx || !avctx->priv_data)
+        return 0;
+
+    dca = avctx->priv_data;
 
     if (!(avctx->err_recognition & (AV_EF_CRCCHECK | AV_EF_CAREFUL)))
         return 0;

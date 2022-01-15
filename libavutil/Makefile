@@ -86,6 +86,8 @@ HEADERS = adler32.h                                                     \
           tea.h                                                         \
           tx.h                                                          \
           film_grain_params.h                                           \
+          extlib.h                                                      \
+#^PLEX
 
 HEADERS-$(CONFIG_LZO)                   += lzo.h
 
@@ -122,6 +124,7 @@ OBJS = adler32.o                                                        \
        encryption_info.o                                                \
        error.o                                                          \
        eval.o                                                           \
+       extloader.o                                                      \
        fifo.o                                                           \
        file.o                                                           \
        file_open.o                                                      \

@@ -364,7 +364,7 @@ cglobal hscale%1to%2_%4, %5, 10, %6, pos0, dst, w, srcmem, filter, fltpos, fltsi
     movd [dstq+wq*2], m0
 %endif ; %3 ==/!= X
 %else ; %2 == 19
-    PMINSD        m0, m2, m4
+    PMINSD        m0, m2, m4, 1
 %ifnidn %3, X
     mova [dstq+wq*(4>>wshr)], m0
 %else ; %3 == X

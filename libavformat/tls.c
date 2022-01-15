@@ -80,14 +80,14 @@ int ff_tls_open_underlying(TLSShared *c, URLContext *parent, const char *uri, AV
 
     ff_url_join(buf, sizeof(buf), "tcp", NULL, c->underlying_host, port, "%s", p);
 
+    if (!c->host && !(c->host = av_strdup(c->underlying_host)))
+        return AVERROR(ENOMEM);
+
     hints.ai_flags = AI_NUMERICHOST;
-    if (!getaddrinfo(c->underlying_host, NULL, &hints, &ai)) {
+    if (!getaddrinfo(c->host, NULL, &hints, &ai)) {
         c->numerichost = 1;
         freeaddrinfo(ai);
     }
-
-    if (!c->host && !(c->host = av_strdup(c->underlying_host)))
-        return AVERROR(ENOMEM);
 
     proxy_path = c->http_proxy ? c->http_proxy : getenv("http_proxy");
     use_proxy = !ff_http_match_no_proxy(getenv("no_proxy"), c->underlying_host) &&

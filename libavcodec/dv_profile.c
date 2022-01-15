@@ -29,6 +29,9 @@
 #include "dv_profile.h"
 #include "dv_profile_internal.h"
 
+#undef CONFIG_DVPROFILE
+#define CONFIG_DVPROFILE 1
+
 #if CONFIG_DVPROFILE
 
 static const uint8_t dv_audio_shuffle525[10][9] = {

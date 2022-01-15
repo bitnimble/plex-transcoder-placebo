@@ -168,6 +168,16 @@ int av_parser_parse2(AVCodecParserContext *s, AVCodecContext *avctx,
 #define FILL(name) if(s->name > 0 && avctx->name <= 0) avctx->name = s->name
     if (avctx->codec_type == AVMEDIA_TYPE_VIDEO) {
         FILL(field_order);
+//PLEX
+        FILL(width);
+        FILL(height);
+        FILL(coded_width);
+        FILL(coded_height);
+
+        if (s->picture_structure == AV_PICTURE_STRUCTURE_TOP_FIELD ||
+            s->picture_structure == AV_PICTURE_STRUCTURE_BOTTOM_FIELD)
+            avctx->separate_fields = 1;
+//PLEX
     }
 
     /* update the file pointer */

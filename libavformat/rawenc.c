@@ -426,6 +426,19 @@ const AVOutputFormat ff_mlp_muxer = {
 };
 #endif
 
+#if CONFIG_MP1_MUXER
+AVOutputFormat ff_mp1_muxer = {
+    .name              = "mp1",
+    .long_name         = NULL_IF_CONFIG_SMALL("MP1 (MPEG audio layer 1)"),
+    .mime_type         = "audio/mpeg",
+    .extensions        = "mp1,m1a",
+    .audio_codec       = AV_CODEC_ID_MP1,
+    .video_codec       = AV_CODEC_ID_NONE,
+    .write_packet      = ff_raw_write_packet,
+    .flags             = AVFMT_NOTIMESTAMPS,
+};
+#endif
+
 #if CONFIG_MP2_MUXER
 const AVOutputFormat ff_mp2_muxer = {
     .name              = "mp2",

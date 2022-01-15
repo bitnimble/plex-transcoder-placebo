@@ -95,6 +95,11 @@ typedef struct FFFormatContext {
      */
     PacketList packet_buffer;
 
+    //PLEX
+    struct AVPacketList *packet_buffer_last;
+    struct AVPacketList *packet_buffer_last_end;
+    //PLEX
+
     /* av_seek_frame() support */
     int64_t data_offset; /**< offset of the first packet */
 
@@ -154,6 +159,12 @@ typedef struct FFFormatContext {
     int inject_global_side_data;
 
     int avoid_negative_ts_use_pts;
+
+    /**
+     * Whether or not a header has already been written
+     */
+    int header_written;
+    int write_header_ret;
 
     /**
      * Timestamp of the end of the shortest stream.
@@ -236,6 +247,17 @@ typedef struct FFStream {
      * Whether the internal avctx needs to be updated from codecpar (after a late change to codecpar)
      */
     int need_context_update;
+
+//PLEX
+    int decrypt_inited;
+
+    AVRational avg_frame_rate_pre;
+//PLEX
+
+    /**
+     * The wallclock timestamp of the most recent read packet (if AVFMT_FLAG_FILL_WALLCLOCK_DTS is set)
+     */
+    int64_t cur_wallclock_time;
 
     int is_intra_only;
 
@@ -1023,5 +1045,14 @@ void avpriv_register_devices(const AVOutputFormat * const o[], const AVInputForm
  * be seekable.
  */
 int ff_format_shift_data(AVFormatContext *s, int64_t read_start, int shift_size);
+
+/**
+ * Copy the side data from one stream to another; useful in chained (de)muxers
+ *
+ * @param dst Stream to copy to
+ * @param src Stream to copy from
+ * @return 0 on success, negative AVERROR value on failure
+ */
+int ff_stream_copy_side_data(AVStream *dst, const AVStream *src);
 
 #endif /* AVFORMAT_INTERNAL_H */

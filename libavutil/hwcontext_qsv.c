@@ -1328,8 +1328,8 @@ static int qsv_map_to(AVHWFramesContext *dst_ctx,
     if (err)
         return err;
 
-    dst->width   = src->width;
-    dst->height  = src->height;
+    hwctx->surfaces[i].Info.CropW = dst->width  = src->width;
+    hwctx->surfaces[i].Info.CropH = dst->height = src->height;
     dst->data[3] = (uint8_t*)&hwctx->surfaces[index];
 
     return 0;

@@ -116,6 +116,11 @@ static int av1_parser_parse(AVCodecParserContext *ctx,
         ctx->width  = frame->frame_width_minus_1 + 1;
         ctx->height = frame->frame_height_minus_1 + 1;
 
+        av_reduce(&avctx->sample_aspect_ratio.num, &avctx->sample_aspect_ratio.den,
+                  (int64_t)ctx->width * (frame->render_height_minus_1 + 1),
+                  (int64_t)ctx->height * (frame->render_width_minus_1 + 1),
+                  INT_MAX);
+
         ctx->key_frame = frame->frame_type == AV1_FRAME_KEY && !frame->show_existing_frame;
 
         switch (frame->frame_type) {

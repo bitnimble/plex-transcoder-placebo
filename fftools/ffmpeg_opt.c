@@ -46,6 +46,12 @@
 
 #define DEFAULT_PASS_LOGFILENAME_PREFIX "ffmpeg2pass"
 
+//PLEX
+#include "plex.h"
+#include "libavutil/extlib.h"
+#include "libavformat/internal.h"
+//PLEX
+
 #define SPECIFIER_OPT_FMT_str  "%s"
 #define SPECIFIER_OPT_FMT_i    "%i"
 #define SPECIFIER_OPT_FMT_i64  "%"PRId64
@@ -98,6 +104,10 @@ static const char *const opt_name_disposition[]               = {"disposition", 
 static const char *const opt_name_time_bases[]                = {"time_base", NULL};
 static const char *const opt_name_enc_time_bases[]            = {"enc_time_base", NULL};
 static const char *const opt_name_bits_per_raw_sample[]       = {"bits_per_raw_sample", NULL};
+
+//PLEX
+static const char *const opt_name_hwaccel_fallback_thresholds[] = {"hwaccel_fallback_threshold", NULL};
+//PLEX
 
 #define WARN_MULTIPLE_OPT_USAGE(name, type, so, st)\
 {\
@@ -168,6 +178,10 @@ int filter_complex_nbthreads = 0;
 int vstats_version = 2;
 int auto_conversion_filters = 1;
 int64_t stats_period = 500000;
+
+//PLEX
+int exit_on_io_error = 0;
+//PLEX
 
 
 static int file_overwrite     = 0;
@@ -753,7 +767,7 @@ static const AVCodec *find_codec_or_die(const char *name, enum AVMediaType type,
         av_log(NULL, AV_LOG_FATAL, "Unknown %s '%s'\n", codec_string, name);
         exit_program(1);
     }
-    if (codec->type != type && !recast_media) {
+    if (codec->type != type && !recast_media && type != AVMEDIA_TYPE_UNKNOWN) {
         av_log(NULL, AV_LOG_FATAL, "Invalid %s type '%s'\n", codec_string, name);
         exit_program(1);
     }
@@ -955,6 +969,9 @@ static void add_input_streams(OptionsContext *o, AVFormatContext *ic)
             }
 
             ist->hwaccel_pix_fmt = AV_PIX_FMT_NONE;
+
+            MATCH_PER_STREAM_OPT(hwaccel_fallback_thresholds, i,
+                                 ist->hwaccel_fallback_threshold, ic, st);
 
             break;
         case AVMEDIA_TYPE_AUDIO:
@@ -1170,6 +1187,8 @@ static int open_input_file(OptionsContext *o, const char *filename)
         ic->flags |= AVFMT_FLAG_BITEXACT;
     ic->interrupt_callback = int_cb;
 
+    plex_status("opening");
+
     if (!av_dict_get(o->g->format_opts, "scan_all_pmts", NULL, AV_DICT_MATCH_CASE)) {
         av_dict_set(&o->g->format_opts, "scan_all_pmts", "1", AV_DICT_DONT_OVERWRITE);
         scan_all_pmts_set = 1;
@@ -1187,6 +1206,15 @@ static int open_input_file(OptionsContext *o, const char *filename)
     remove_avoptions(&o->g->format_opts, o->g->codec_opts);
     assert_avoptions(o->g->format_opts);
 
+    plex_status("opened");
+
+//PLEX
+    for (i = 0; i < ic->nb_streams; i++) {
+        if (ic->streams[i]->codecpar->codec_id != AV_CODEC_ID_AAC)
+            plex_report_stream(ic->streams[i]);
+    }
+//PLEX
+
     /* apply forced codec ids */
     for (i = 0; i < ic->nb_streams; i++)
         choose_decoder(o, ic, ic->streams[i]);
@@ -1198,6 +1226,54 @@ static int open_input_file(OptionsContext *o, const char *filename)
         /* If not enough info to get the stream parameters, we decode the
            first frames to get it. (used in mpeg case for example) */
         ret = avformat_find_stream_info(ic, opts);
+//PLEX
+        int repeat_find_stream_info = ic->nb_streams > orig_nb_streams;
+        for (i = 0; i < ic->nb_streams; i++) {
+            AVStream *st = ic->streams[i];
+            if (i > orig_nb_streams || ffstream(st)->request_probe == -1 || st->codecpar->codec_id == AV_CODEC_ID_AAC) // -1 indicates the codec was probed
+                plex_report_stream(st);
+
+            if (st->codecpar &&
+                st->codecpar->codec_id == AV_CODEC_ID_AAC_LATM &&
+                st->codecpar->sample_rate == 0)
+                repeat_find_stream_info = 1;
+        }
+
+        if (repeat_find_stream_info) {
+            av_set_needs_rescan();
+            for (i = orig_nb_streams; i < ic->nb_streams; i++) {
+                AVStream *st = ic->streams[i];
+                FFStream *sti = ffstream(st);
+
+                choose_decoder(o, ic, st);
+
+                if (sti->info) {
+                    memset(sti->info, 0, sizeof(*sti->info));
+                    sti->info->last_dts = AV_NOPTS_VALUE;
+                    sti->info->fps_first_dts = AV_NOPTS_VALUE;
+                    sti->info->fps_last_dts  = AV_NOPTS_VALUE;
+                }
+
+                sti->probe_packets = ic->max_probe_packets;
+                sti->last_dts_for_order_check = AV_NOPTS_VALUE;
+                sti->need_context_update = 1;
+                st->r_frame_rate.num = st->r_frame_rate.den = 0;
+                sti->codec_info_nb_frames = 0;
+                st->avg_frame_rate = sti->avg_frame_rate_pre;
+            }
+            for (i = 0; i < orig_nb_streams; i++) {
+                av_dict_free(&opts[i]);
+                ffstream(ic->streams[i])->codec_info_nb_frames = 0;
+            }
+            av_freep(&opts);
+            opts = setup_find_stream_info_opts(ic, o->g->codec_opts);
+            orig_nb_streams = ic->nb_streams;
+            ret = avformat_find_stream_info(ic, opts);
+        }
+
+        for (i = 0; i < ic->nb_streams; i++)
+            plex_report_stream_detail(ic->streams[i]);
+//PLEX
 
         for (i = 0; i < orig_nb_streams; i++)
             av_dict_free(&opts[i]);
@@ -1587,7 +1663,7 @@ static OutputStream *new_output_stream(OptionsContext *o, AVFormatContext *oc, e
     MATCH_PER_STREAM_OPT(disposition, str, ost->disposition, oc, st);
     ost->disposition = av_strdup(ost->disposition);
 
-    ost->max_muxing_queue_size = 128;
+    ost->max_muxing_queue_size = 10000;
     MATCH_PER_STREAM_OPT(max_muxing_queue_size, i, ost->max_muxing_queue_size, oc, st);
     ost->max_muxing_queue_size = FFMIN(ost->max_muxing_queue_size, INT_MAX / sizeof(ost->pkt));
     ost->max_muxing_queue_size *= sizeof(ost->pkt);
@@ -1616,6 +1692,7 @@ static OutputStream *new_output_stream(OptionsContext *o, AVFormatContext *oc, e
         input_streams[source_index]->st->discard = input_streams[source_index]->user_set_discard;
     }
     ost->last_mux_dts = AV_NOPTS_VALUE;
+    ost->last_mux_pts = AV_NOPTS_VALUE; // <PLEX
 
     ost->muxing_queue = av_fifo_alloc(8 * sizeof(AVPacket));
     if (!ost->muxing_queue)
@@ -1933,6 +2010,44 @@ static OutputStream *new_video_stream(OptionsContext *o, AVFormatContext *oc, in
 
     if (ost->stream_copy)
         check_streamcopy_filters(o, oc, ost, AVMEDIA_TYPE_VIDEO);
+
+//PLEX
+    if (source_index >= 0 && 0)
+    {
+      // See if things are sane.
+      long int averageFPS = 0;
+      if (input_streams[source_index]->st->avg_frame_rate.den != 0)
+        averageFPS = (int)(av_q2d(input_streams[source_index]->st->avg_frame_rate)+0.5);
+
+      long int framerateFPS = 0;
+      if (input_streams[source_index]->st->r_frame_rate.den != 0)
+        framerateFPS = (int)(av_q2d(input_streams[source_index]->st->r_frame_rate)+0.5);
+
+      PMS_Log(LOG_LEVEL_DEBUG, "Average FPS ~ %d fps, Frame rate ~ %d fps.", averageFPS, framerateFPS);
+
+      // Don't trust any super high framerates. But if a frame rate was specified, just use that.
+      if (!frame_rate && averageFPS != 0 && framerateFPS != 0 && labs(averageFPS - framerateFPS) > 10)
+      {
+        AVStream* st = input_streams[source_index]->st;
+
+        PMS_Log(LOG_LEVEL_DEBUG, "Codec frame rate differs from container rate, attempting to fix.");
+
+        if (st->avg_frame_rate.den != 0)
+        {
+          ost->frame_rate.num = st->avg_frame_rate.num;
+          ost->frame_rate.den = st->avg_frame_rate.den;
+          PMS_Log(LOG_LEVEL_DEBUG, "Forcing fps to frame rate of %f.", av_q2d(st->avg_frame_rate));
+        }
+
+        if (st->avg_frame_rate.den == 0 || av_q2d(st->avg_frame_rate) > 150.0)
+        {
+          ost->frame_rate.num = st->r_frame_rate.num;
+          ost->frame_rate.den = st->r_frame_rate.den;
+          PMS_Log(LOG_LEVEL_DEBUG, "Forcing fps to frame rate of %f.", av_q2d(st->r_frame_rate));
+        }
+      }
+    }
+//PLEX
 
     return ost;
 }
@@ -2327,6 +2442,17 @@ static int open_output_file(OptionsContext *o, const char *filename)
         }
     }
 
+//PLEX
+    /* we need to detect the format of the subtitle stream (if any) and init
+     some stuff before we do the actual pre set-up */
+    for (i = 0; i < nb_input_streams; i++)
+        plex_prepare_setup_streams_for_input_stream(input_streams[i]);
+
+    /* we need to choose the subtitle stream we want to burn in
+     (needs to be processed BEFORE the video stream is set up
+     as this call will configer the vfilters) */
+//PLEX
+
     if (!o->nb_stream_maps) {
         char *subtitle_codec_name = NULL;
         /* pick the "best" stream of each type */
@@ -2365,8 +2491,12 @@ static int open_output_file(OptionsContext *o, const char *filename)
                     }
                }
             }
-            if (idx >= 0)
+//PLEX
+            if (idx >= 0) {
+                plex_link_input_stream(input_streams[idx]);
                 new_video_stream(o, oc, idx);
+            }
+//PLEX
         }
 
         /* audio: most channels */
@@ -2454,6 +2584,11 @@ static int open_output_file(OptionsContext *o, const char *filename)
                 OutputFilter *ofilter = NULL;
                 int j, k;
 
+//PLEX
+                if (map->file_index < nb_input_files)
+                    plex_link_input_stream(input_streams[input_files[map->file_index]->ist_index + map->stream_index]);
+//PLEX
+
                 for (j = 0; j < nb_filtergraphs; j++) {
                     fg = filtergraphs[j];
                     for (k = 0; k < fg->nb_outputs; k++) {
@@ -2488,6 +2623,19 @@ loop_end:
                     continue;
                 if(o->    data_disable && ist->st->codecpar->codec_type == AVMEDIA_TYPE_DATA)
                     continue;
+
+//PLEX
+                if (ignore_unknown_streams &&
+                    (ist->st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO ||
+                     ist->st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) &&
+                    ffstream(ist->st)->codec_info_nb_frames == 0) {
+                    av_log(NULL, AV_LOG_WARNING, "Skipping stream #%d:%d - not parsed.\n",
+                           map->file_index, map->stream_index);
+                    continue;
+                }
+
+                plex_link_input_stream(ist);
+//PLEX
 
                 ost = NULL;
                 switch (ist->st->codecpar->codec_type) {
@@ -3895,6 +4043,17 @@ const OptionDef options[] = {
         "initialise hardware device", "args" },
     { "filter_hw_device", HAS_ARG | OPT_EXPERT, { .func_arg = opt_filter_hw_device },
         "set hardware device used when filtering", "device" },
+
+//PLEX
+    { "map_inlineass", HAS_ARG | OPT_EXPERT | OPT_PERFILE | OPT_OUTPUT, { .func_arg = plex_opt_subtitle_stream }, "index of the subtitle stream to burn into the video", "input_file_id:stream_specifier" },
+    { "progressurl", HAS_ARG | OPT_EXPERT, { .func_arg = plex_opt_progress_url }, "write progress information via HTTP PUT", "url" },
+    { "loglevel_plex", HAS_ARG | OPT_EXPERT, { .func_arg = plex_opt_loglevel}, "log level for messages that will be sent to PMS", "" },
+    { "hwaccel_fallback_threshold", OPT_VIDEO | OPT_INT | HAS_ARG | OPT_EXPERT |
+                                    OPT_SPEC | OPT_INPUT,                    { .off = OFFSET(hwaccel_fallback_thresholds) },
+        "set when HW accelerated decoding should forcibly fall back", "fallback" },
+    { "xioerror", OPT_BOOL | OPT_EXPERT, { &exit_on_io_error },
+        "exit on I/O error", "error" },
+//PLEX
 
     { NULL, },
 };

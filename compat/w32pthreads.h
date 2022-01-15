@@ -66,7 +66,11 @@ typedef CONDITION_VARIABLE pthread_cond_t;
 #define PTHREAD_CANCEL_ENABLE 1
 #define PTHREAD_CANCEL_DISABLE 0
 
+#if HAVE_WINRT
+static av_unused DWORD __stdcall attribute_align_arg win32thread_worker(void *arg)
+#else
 static av_unused unsigned __stdcall attribute_align_arg win32thread_worker(void *arg)
+#endif
 {
     pthread_t *h = (pthread_t*)arg;
     h->ret = h->func(h->arg);

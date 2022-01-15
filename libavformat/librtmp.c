@@ -230,6 +230,8 @@ static int rtmp_open(URLContext *s, const char *uri, int flags)
 
     if (flags & AVIO_FLAG_WRITE)
         RTMP_EnableWrite(r);
+        
+    RTMP_SetBufferMS(r, 10 * 60 * 60 * 1000); //PLEX: 10 hours default
 
     if (!RTMP_Connect(r, NULL) || !RTMP_ConnectStream(r, 0)) {
         rc = AVERROR_UNKNOWN;

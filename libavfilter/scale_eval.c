@@ -151,6 +151,13 @@ int ff_scale_adjust_dimensions(AVFilterLink *inlink,
         int tmp_w = av_rescale(h, inlink->w, inlink->h);
         int tmp_h = av_rescale(w, inlink->h, inlink->w);
 
+        //PLEX: Use the DAR instead of the raw pixel ratio
+        if (inlink->sample_aspect_ratio.num && inlink->sample_aspect_ratio.den) {
+            tmp_w = av_rescale(h, inlink->w * inlink->sample_aspect_ratio.num, inlink->h * inlink->sample_aspect_ratio.den);
+            tmp_h = av_rescale(w, inlink->h * inlink->sample_aspect_ratio.den, inlink->w * inlink->sample_aspect_ratio.num);
+        }
+        //PLEX
+
         if (force_original_aspect_ratio == 1) {
              w = FFMIN(tmp_w, w);
              h = FFMIN(tmp_h, h);

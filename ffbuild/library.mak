@@ -11,6 +11,47 @@ INCINSTDIR := $(INCDIR)/lib$(NAME)
 
 INSTHEADERS := $(INSTHEADERS) $(HEADERS:%=$(SUBDIR)%)
 
+EXTLIBS := $(foreach type, $(COMPONENTTYPES), $(filter %$(type), $(EXTERNALS)))
+
+EXTFFLIBS := $(EXTFFLIBS) -l$(NAME)
+
+install-lib$(NAME)-components:
+
+ORIGNAME := $(NAME)
+
+NAME = $(EXTLIB)
+UPPERNAME = $(shell echo $(EXTLIB) | tr a-z A-Z)
+TYPE = $(notdir $(subst _,/,$(UPPERNAME)))
+define EXTRULE
+-include $(wildcard $(patsubst $(filter-out $(OBJS-$(NAME):%=$(SUBDIR)%), $(OBJS)), %.o, %.d) $(OBJS-$(NAME):%=$(SUBDIR)%-$(NAME).d) $(SUBDIR)$(NAME)-extlib_init.d)
+$(SUBDIR)$(NAME)-extlib_init.o: libavutil/extlib_init.c
+	$$(COMPILE_C) -DEXTLIBNAME=ff_$(NAME) -DBUILDING_EXTERNAL_$(TYPE) -DHAVE_AV_CONFIG_H -DFFLIB_$(ORIGNAME) -DEXTLIBHWACCELS="$(HWACCELS-$(NAME))" -DEXTLIBHWACCEL_PTRS="$(HWACCELS-$(NAME):%=&%)"
+$(SUBDIR)%.o-$(NAME).o: $(SUBDIR)%.c
+	$$(COMPILE_C) -DBUILDING_$(UPPERNAME)_EXTERNAL -DBUILDING_EXTERNAL -DHAVE_AV_CONFIG_H
+$(SUBDIR)%.o-$(NAME).o: $(SUBDIR)%.S
+	$$(COMPILE_S) -DBUILDING_$(UPPERNAME)_EXTERNAL -DBUILDING_EXTERNAL -DHAVE_AV_CONFIG_H
+$(SUBDIR)%.o-$(NAME).o: $(SUBDIR)%.asm
+	$$(DEPX86ASM) $$(X86ASMFLAGS) -I $$(<D)/ -M -o $$@ $$< > $$(@:.o=.d)
+	$$(X86ASM) $$(X86ASMFLAGS) -I $$(<D)/ -o $$@ $$<
+	-$$(if $$(ASMSTRIPFLAGS), $$(STRIP) $$(ASMSTRIPFLAGS) $$@)
+$(SUBDIR)lib$(NAME).ver:
+	$(Q)printf "$(NAME)_1 {\n  global:\n    av_init_library;\n  local:\n    *;\n};" | $(VERSION_SCRIPT_POSTPROCESS_CMD) > $$@
+$(SUBDIR)$(SLIBNAME): OBJS = $(SUBDIR)$(NAME)-extlib_init.o # for SLIB_CREATE_DEF_CMD
+$(SUBDIR)$(SLIBNAME): $(OBJS-$(NAME):%=$(SUBDIR)%-$(NAME).o) $(SUBDIR)$(NAME)-extlib_init.o $(SUBDIR)lib$(NAME).ver $(FF_STATIC_DEP_LIBS)
+	$(SLIB_CREATE_DEF_CMD)
+	$$(LD) $(SHFLAGS) $(EXTLIBFLAGS) $(LDFLAGS) $(LDSOFLAGS) $$(LD_O) $$(filter %.o,$$^) $(FF_STATIC_DEP_LIBS) $(FFEXTRALIBS)
+install-$(NAME): $(SUBDIR)$(SLIBNAME)
+	$(Q)mkdir -p "$(SHLIBDIR)/components/"
+	$$(INSTALL) -m 755 $$< "$(SHLIBDIR)/components/$(SLIBNAME)"
+	$$(STRIP) "$(SHLIBDIR)/components/$(SLIBNAME)"
+install-lib$(ORIGNAME)-components: install-$(NAME)
+all: $(SUBDIR)$(SLIBNAME)
+endef
+
+$(foreach EXTLIB, $(EXTLIBS), $(eval $(EXTRULE)))
+
+NAME := $(ORIGNAME)
+
 all-$(CONFIG_STATIC): $(SUBDIR)$(LIBNAME)  $(SUBDIR)lib$(FULLNAME).pc
 all-$(CONFIG_SHARED): $(SUBDIR)$(SLIBNAME) $(SUBDIR)lib$(FULLNAME).pc
 
@@ -40,6 +81,8 @@ $(SUBDIR)$(LIBNAME): $(OBJS) $(STLIBOBJS)
 
 install-headers: install-lib$(NAME)-headers install-lib$(NAME)-pkgconfig
 
+install-components: install-lib$(ORIGNAME)-components
+
 install-libs-$(CONFIG_STATIC): install-lib$(NAME)-static
 install-libs-$(CONFIG_SHARED): install-lib$(NAME)-shared
 
@@ -64,7 +107,9 @@ $(SUBDIR)lib$(NAME).ver: $(SUBDIR)lib$(NAME).v $(OBJS)
 $(SUBDIR)$(SLIBNAME): $(SUBDIR)$(SLIBNAME_WITH_MAJOR)
 	$(Q)cd ./$(SUBDIR) && $(LN_S) $(SLIBNAME_WITH_MAJOR) $(SLIBNAME)
 
-$(SUBDIR)$(SLIBNAME_WITH_MAJOR): $(OBJS) $(SHLIBOBJS) $(SLIBOBJS) $(SUBDIR)lib$(NAME).ver
+MAKEDEF-OBJS-$(NAME) := $(OBJS)
+$(SUBDIR)$(SLIBNAME_WITH_MAJOR): OBJS := $$(MAKEDEF-OBJS-$(NAME))
+$(SUBDIR)$(SLIBNAME_WITH_MAJOR): $(OBJS) $(SHLIBOBJS)  $(SLIBOBJS) $(SUBDIR)lib$(NAME).ver
 	$(SLIB_CREATE_DEF_CMD)
 	$$(LD) $(SHFLAGS) $(LDFLAGS) $(LDSOFLAGS) $$(LD_O) $$(filter %.o,$$^) $(FFEXTRALIBS)
 	$(SLIB_EXTRA_CMD)
@@ -74,8 +119,8 @@ $(SUBDIR)$(SLIBNAME_WITH_MAJOR): $(DEP_LIBS)
 endif
 
 clean::
-	$(RM) $(addprefix $(SUBDIR),$(CLEANFILES) $(CLEANSUFFIXES) $(LIBSUFFIXES)) \
-	    $(CLEANSUFFIXES:%=$(SUBDIR)$(ARCH)/%) $(CLEANSUFFIXES:%=$(SUBDIR)tests/%)
+	$$(call RM_SPLIT,$(addprefix $(SUBDIR),$(CLEANFILES) $(CLEANSUFFIXES) $(LIBSUFFIXES)) \
+	    $(CLEANSUFFIXES:%=$(SUBDIR)$(ARCH)/%) $(CLEANSUFFIXES:%=$(SUBDIR)tests/%))
 
 install-lib$(NAME)-shared: $(SUBDIR)$(SLIBNAME)
 	$(Q)mkdir -p "$(SHLIBDIR)"

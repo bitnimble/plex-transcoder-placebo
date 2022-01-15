@@ -77,7 +77,7 @@ static const AVCodec *find_probe_decoder(AVFormatContext *s, const AVStream *st,
 #endif
 
     codec = ff_find_decoder(s, st, codec_id);
-    if (!codec)
+    if (!codec || strstr(codec->name, "_eae"))
         return NULL;
 
     if (codec->capabilities & AV_CODEC_CAP_AVOID_PROBING) {
@@ -90,6 +90,8 @@ static const AVCodec *find_probe_decoder(AVFormatContext *s, const AVStream *st,
                 return probe_codec;
             }
         }
+        // Trying a system decoder here will cause more trouble than it solves.
+        return NULL;
     }
 
     return codec;
@@ -115,6 +117,7 @@ static int set_codec_from_probe_data(AVFormatContext *s, AVStream *st,
         { "loas",       AV_CODEC_ID_AAC_LATM,     AVMEDIA_TYPE_AUDIO    },
         { "m4v",        AV_CODEC_ID_MPEG4,        AVMEDIA_TYPE_VIDEO    },
         { "mjpeg_2000", AV_CODEC_ID_JPEG2000,     AVMEDIA_TYPE_VIDEO    },
+        { "mp2",        AV_CODEC_ID_MP2,          AVMEDIA_TYPE_AUDIO    },
         { "mp3",        AV_CODEC_ID_MP3,          AVMEDIA_TYPE_AUDIO    },
         { "mpegvideo",  AV_CODEC_ID_MPEG2VIDEO,   AVMEDIA_TYPE_VIDEO    },
         { "truehd",     AV_CODEC_ID_TRUEHD,       AVMEDIA_TYPE_AUDIO    },
@@ -310,6 +313,7 @@ int avformat_open_input(AVFormatContext **ps, const char *filename,
 
     if (id3v2_extra_meta) {
         if (!strcmp(s->iformat->name, "mp3") || !strcmp(s->iformat->name, "aac") ||
+            !strcmp(s->iformat->name, "mp1") || !strcmp(s->iformat->name, "mp2") ||
             !strcmp(s->iformat->name, "tta") || !strcmp(s->iformat->name, "wav")) {
             if ((ret = ff_id3v2_parse_apic(s, id3v2_extra_meta)) < 0)
                 goto close;
@@ -608,6 +612,26 @@ FF_ENABLE_DEPRECATION_WARNINGS
                 st->start_time = wrap_timestamp(st, st->start_time);
             if (!is_relative(sti->cur_dts))
                 sti->cur_dts = wrap_timestamp(st, sti->cur_dts);
+        }
+
+        if ((s->flags & AVFMT_FLAG_DISCARD_CORRUPT_TS) &&
+            (pkt->flags & AV_PKT_FLAG_CORRUPT)) {
+            pkt->pts = pkt->dts = AV_NOPTS_VALUE;
+            av_log(s, AV_LOG_WARNING,
+                   "Discarded timestamp on corrupted packet (stream = %d)\n",
+                   pkt->stream_index);
+        }
+
+        if (s->flags & AVFMT_FLAG_FILL_WALLCLOCK_DTS) {
+            int64_t cur_wallclock_time = av_gettime_relative();
+            if (pkt->dts == AV_NOPTS_VALUE && sti->cur_dts != AV_NOPTS_VALUE && sti->cur_wallclock_time) {
+                int64_t wallclock_offset = av_rescale_q(sti->cur_wallclock_time - cur_wallclock_time, AV_TIME_BASE_Q, st->time_base);
+                pkt->dts = sti->cur_dts + FFMAX(wallclock_offset, 1);
+                av_log(s, AV_LOG_VERBOSE,
+                       "Filled timestamp from wallclock (stream = %d; last = %"PRId64"; val = %"PRId64")\n",
+                       pkt->stream_index, sti->cur_dts, pkt->dts);
+            }
+            sti->cur_wallclock_time = cur_wallclock_time;
         }
 
         pkt->dts = wrap_timestamp(st, pkt->dts);
@@ -1165,7 +1189,7 @@ static int parse_packet(AVFormatContext *s, AVPacket *pkt,
         /* set the duration */
         out_pkt->duration = (sti->parser->flags & PARSER_FLAG_COMPLETE_FRAMES) ? pkt->duration : 0;
         if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
-            if (sti->avctx->sample_rate > 0) {
+            if (sti->avctx->sample_rate > 0 && sti->parser->duration >= 0) {
                 out_pkt->duration =
                     av_rescale_q_rnd(sti->parser->duration,
                                      (AVRational) { 1, sti->avctx->sample_rate },
@@ -1190,6 +1214,11 @@ static int parse_packet(AVFormatContext *s, AVPacket *pkt,
 
         if (sti->parser->key_frame == -1 && sti->parser->pict_type ==AV_PICTURE_TYPE_NONE && (pkt->flags&AV_PKT_FLAG_KEY))
             out_pkt->flags |= AV_PKT_FLAG_KEY;
+
+//PLEX
+        if (pkt->flags & AV_PKT_FLAG_DISCARD)
+            out_pkt->flags |= AV_PKT_FLAG_DISCARD;
+//PLEX
 
         compute_pkt_fields(s, st, sti->parser, out_pkt, next_dts, next_pts);
 
@@ -1217,6 +1246,7 @@ static int64_t ts_to_samples(AVStream *st, int64_t ts)
     return av_rescale(ts, st->time_base.num * st->codecpar->sample_rate, st->time_base.den);
 }
 
+extern AVDecryptionCallbacks *decryption_callbacks_ptr;
 static int read_frame_internal(AVFormatContext *s, AVPacket *pkt)
 {
     FFFormatContext *const si = ffformatcontext(s);
@@ -1382,6 +1412,12 @@ static int read_frame_internal(AVFormatContext *s, AVPacket *pkt)
             }
             sti->inject_global_side_data = 0;
         }
+
+        ff_lock_avformat();
+        int (*handle_packet)(AVFormatContext *ctx, AVPacket *pkt) = decryption_callbacks_ptr->handle_packet;
+        ff_unlock_avformat();
+        if (handle_packet)
+            handle_packet(s, pkt);
     }
 
     av_opt_get_dict_val(s, "metadata", AV_OPT_SEARCH_CHILDREN, &metadata);
@@ -1932,8 +1968,8 @@ static int has_codec_parameters(const AVStream *st, const char **errmsg_ptr)
             FAIL("unspecified sample rate");
         if (!avctx->channels)
             FAIL("unspecified number of channels");
-        if (sti->info->found_decoder >= 0 && !sti->nb_decoded_frames && avctx->codec_id == AV_CODEC_ID_DTS)
-            FAIL("no decodable DTS frames");
+/*        if (sti->info->found_decoder >= 0 && !sti->nb_decoded_frames && avctx->codec_id == AV_CODEC_ID_DTS)
+            FAIL("no decodable DTS frames");*/ //PLEX
         break;
     case AVMEDIA_TYPE_VIDEO:
         if (!avctx->width)
@@ -2005,7 +2041,7 @@ static int try_decode_frame(AVFormatContext *s, AVStream *st,
     } else if (!sti->info->found_decoder)
         sti->info->found_decoder = 1;
 
-    if (sti->info->found_decoder < 0) {
+    if (sti->info->found_decoder < 0 || !avctx->codec) {
         ret = -1;
         goto fail;
     }
@@ -2210,6 +2246,8 @@ void ff_rfps_calculate(AVFormatContext *ic)
         AVStream *const st  = ic->streams[i];
         FFStream *const sti = ffstream(st);
 
+        sti->avg_frame_rate_pre = st->avg_frame_rate; //PLEX
+
         if (st->codecpar->codec_type != AVMEDIA_TYPE_VIDEO)
             continue;
         // the check for tb_unreliable() is not completely correct, since this is not about handling
@@ -2398,9 +2436,22 @@ int avformat_find_stream_info(AVFormatContext *ic, AVDictionary **options)
     int64_t max_analyze_duration = ic->max_analyze_duration;
     int64_t max_stream_analyze_duration;
     int64_t max_subtitle_analyze_duration;
+    int64_t max_empty_analyze_duration; //PLEX
+    int skip_empty_streams = 0;
     int64_t probesize = ic->probesize;
     int eof_reached = 0;
     int *missing_streams = av_opt_ptr(ic->iformat->priv_class, ic->priv_data, "missing_streams");
+
+    //PLEX
+    int has_non_empty_video = 0;
+    int has_non_empty_audio = 0;
+    int has_non_empty_subtitles = 0;
+    int can_bail_noheader = 0;
+
+    si->packet_buffer_last = si->packet_buffer.head;
+    si->packet_buffer_last_end = si->packet_buffer.tail;
+    si->packet_buffer.head = si->packet_buffer.tail = NULL;
+    //PLEX
 
     flush_codecs = probesize > 0;
 
@@ -2408,14 +2459,21 @@ int avformat_find_stream_info(AVFormatContext *ic, AVDictionary **options)
 
     max_stream_analyze_duration = max_analyze_duration;
     max_subtitle_analyze_duration = max_analyze_duration;
+    max_empty_analyze_duration = max_analyze_duration;
     if (!max_analyze_duration) {
+        max_empty_analyze_duration =
         max_stream_analyze_duration =
         max_analyze_duration        = 5*AV_TIME_BASE;
         max_subtitle_analyze_duration = 30*AV_TIME_BASE;
-        if (!strcmp(ic->iformat->name, "flv"))
+        if (!strcmp(ic->iformat->name, "flv")) {
+            max_empty_analyze_duration =
             max_stream_analyze_duration = 90*AV_TIME_BASE;
-        if (!strcmp(ic->iformat->name, "mpeg") || !strcmp(ic->iformat->name, "mpegts"))
+        }
+        if (!strcmp(ic->iformat->name, "mpeg") || !strcmp(ic->iformat->name, "mpegts")) {
             max_stream_analyze_duration = 7*AV_TIME_BASE;
+            max_empty_analyze_duration = 2*AV_TIME_BASE; //PLEX
+            can_bail_noheader = 1; //PLEX
+        }
     }
 
     if (ic->pb) {
@@ -2448,6 +2506,10 @@ int avformat_find_stream_info(AVFormatContext *ic, AVDictionary **options)
                     sti->parser->flags |= PARSER_FLAG_COMPLETE_FRAMES;
                 } else if (sti->need_parsing == AVSTREAM_PARSE_FULL_RAW) {
                     sti->parser->flags |= PARSER_FLAG_USE_CODEC_TS;
+                } else if (sti->need_parsing == AVSTREAM_PARSE_NONE &&
+                           sti->parser->flags & PARSER_FLAG_ONCE) {
+                    sti->need_parsing = AVSTREAM_PARSE_FULL_ONCE;
+                    sti->parser->flags |= PARSER_FLAG_SKIP;
                 }
             } else if (sti->need_parsing) {
                 av_log(ic, AV_LOG_VERBOSE, "parser not found for codec "
@@ -2509,6 +2571,33 @@ int avformat_find_stream_info(AVFormatContext *ic, AVDictionary **options)
             int fps_analyze_framecount = 20;
             int count;
 
+//PLEX
+            if (sti->codec_info_nb_frames == 0 &&
+                st->codecpar->codec_type != AVMEDIA_TYPE_SUBTITLE &&
+                (st->codecpar->codec_type != AVMEDIA_TYPE_VIDEO || has_non_empty_video) &&
+                skip_empty_streams)
+                continue;
+
+            if (sti->codec_info_nb_frames &&
+                st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+                !(st->disposition & AV_DISPOSITION_ATTACHED_PIC))
+                has_non_empty_video = 1;
+
+            if (sti->codec_info_nb_frames &&
+                st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+                has_non_empty_audio = 1;
+
+            if (sti->codec_info_nb_frames &&
+                st->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE)
+                has_non_empty_subtitles = 1;
+
+            if (sti->codec_info_nb_frames &&
+                st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+                !(st->disposition & AV_DISPOSITION_ATTACHED_PIC) &&
+                (sti->avctx->properties & FF_CODEC_PROPERTY_CLOSED_CAPTIONS))
+                has_non_empty_subtitles = 1;
+//PLEX
+
             if (!has_codec_parameters(st, NULL))
                 break;
             /* If the timebase is coarse (like the usual millisecond precision
@@ -2552,7 +2641,8 @@ int avformat_find_stream_info(AVFormatContext *ic, AVDictionary **options)
                 analyzed_all_streams = 1;
                 /* NOTE: If the format has no header, then we need to read some
                  * packets to get most of the streams, so we cannot stop here. */
-                if (!(ic->ctx_flags & AVFMTCTX_NOHEADER)) {
+                if (!(ic->ctx_flags & AVFMTCTX_NOHEADER) ||
+                    (can_bail_noheader && has_non_empty_video && has_non_empty_audio && has_non_empty_subtitles)) { //PLEX
                     /* If we found the info for all the codecs, we can stop. */
                     ret = count;
                     av_log(ic, AV_LOG_DEBUG, "All info found\n");
@@ -2578,6 +2668,12 @@ int avformat_find_stream_info(AVFormatContext *ic, AVDictionary **options)
             }
             break;
         }
+
+        //PLEX
+        if (si->packet_buffer_last)
+            ret = avpriv_packet_list_get(&si->packet_buffer, &pkt1);
+        else
+        //PLEX
 
         /* NOTE: A new stream can be added there if no header in file
          * (AVFMTCTX_NOHEADER). */
@@ -2683,6 +2779,9 @@ int avformat_find_stream_info(AVFormatContext *ic, AVDictionary **options)
                     av_packet_unref(pkt1);
                 break;
             }
+            if (t >= max_empty_analyze_duration)
+                skip_empty_streams = 1;
+
             if (pkt->duration > 0) {
                 if (avctx->codec_type == AVMEDIA_TYPE_SUBTITLE && pkt->pts != AV_NOPTS_VALUE && st->start_time != AV_NOPTS_VALUE && pkt->pts >= st->start_time
                     && (uint64_t)pkt->pts - st->start_time < INT64_MAX
@@ -2941,6 +3040,18 @@ find_stream_info_err:
         av_log(ic, AV_LOG_DEBUG, "After avformat_find_stream_info() pos: %"PRId64" bytes read:%"PRId64" seeks:%d frames:%d\n",
                avio_tell(ic->pb), ctx->bytes_read, ctx->seek_count, count);
     }
+
+//PLEX
+    if (si->packet_buffer_last) {
+        if (si->packet_buffer.head)
+            si->packet_buffer.tail->next = si->packet_buffer_last;
+        else
+            si->packet_buffer.head = si->packet_buffer_last;
+        si->packet_buffer.tail = si->packet_buffer_last_end;
+        si->packet_buffer_last = si->packet_buffer_last_end = NULL;
+    }
+//PLEX
+
     return ret;
 
 unref_then_goto_end:

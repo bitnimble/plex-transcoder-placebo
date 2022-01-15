@@ -413,30 +413,18 @@ static int get_range_off(AVFilterContext *ctx, int *off,
                          int *y_rng, int *uv_rng,
                          enum AVColorRange rng, int depth)
 {
-    switch (rng) {
-    case AVCOL_RANGE_UNSPECIFIED: {
+    if (rng == AVCOL_RANGE_UNSPECIFIED) {
         ColorSpaceContext *s = ctx->priv;
 
         if (!s->did_warn_range) {
             av_log(ctx, AV_LOG_WARNING, "Input range not set, assuming tv/mpeg\n");
             s->did_warn_range = 1;
         }
-    }
-        // fall-through
-    case AVCOL_RANGE_MPEG:
-        *off = 16 << (depth - 8);
-        *y_rng = 219 << (depth - 8);
-        *uv_rng = 224 << (depth - 8);
-        break;
-    case AVCOL_RANGE_JPEG:
-        *off = 0;
-        *y_rng = *uv_rng = (256 << (depth - 8)) - 1;
-        break;
-    default:
-        return AVERROR(EINVAL);
+
+        rng = AVCOL_RANGE_MPEG;
     }
 
-    return 0;
+    return ff_get_range_off(off, y_rng, uv_rng, rng, depth);
 }
 
 static int create_filtergraph(AVFilterContext *ctx,
@@ -642,7 +630,7 @@ static int create_filtergraph(AVFilterContext *ctx,
     if (!s->yuv2yuv_passthrough) {
         if (redo_yuv2rgb) {
             double rgb2yuv[3][3], (*yuv2rgb)[3] = s->yuv2rgb_dbl_coeffs;
-            int off, bits, in_rng;
+            int off;
 
             res = get_range_off(ctx, &off, &s->in_y_rng, &s->in_uv_rng,
                                 s->in_rng, in_desc->comp[0].depth);
@@ -656,18 +644,10 @@ static int create_filtergraph(AVFilterContext *ctx,
                 s->yuv_offset[0][n] = off;
             ff_fill_rgb2yuv_table(s->in_lumacoef, rgb2yuv);
             ff_matrix_invert_3x3(rgb2yuv, yuv2rgb);
-            bits = 1 << (in_desc->comp[0].depth - 1);
-            for (n = 0; n < 3; n++) {
-                for (in_rng = s->in_y_rng, m = 0; m < 3; m++, in_rng = s->in_uv_rng) {
-                    s->yuv2rgb_coeffs[n][m][0] = lrint(28672 * bits * yuv2rgb[n][m] / in_rng);
-                    for (o = 1; o < 8; o++)
-                        s->yuv2rgb_coeffs[n][m][o] = s->yuv2rgb_coeffs[n][m][0];
-                }
-            }
-            av_assert2(s->yuv2rgb_coeffs[0][1][0] == 0);
-            av_assert2(s->yuv2rgb_coeffs[2][2][0] == 0);
-            av_assert2(s->yuv2rgb_coeffs[0][0][0] == s->yuv2rgb_coeffs[1][0][0]);
-            av_assert2(s->yuv2rgb_coeffs[0][0][0] == s->yuv2rgb_coeffs[2][0][0]);
+
+            ff_get_yuv_coeffs(s->yuv2rgb_coeffs, yuv2rgb, in_desc->comp[0].depth,
+                              s->in_y_rng, s->in_uv_rng, 1);
+
             s->yuv2rgb = s->dsp.yuv2rgb[(in_desc->comp[0].depth - 8) >> 1]
                                        [in_desc->log2_chroma_h + in_desc->log2_chroma_w];
             emms = 1;
@@ -675,7 +655,7 @@ static int create_filtergraph(AVFilterContext *ctx,
 
         if (redo_rgb2yuv) {
             double (*rgb2yuv)[3] = s->rgb2yuv_dbl_coeffs;
-            int off, out_rng, bits;
+            int off;
 
             res = get_range_off(ctx, &off, &s->out_y_rng, &s->out_uv_rng,
                                 s->out_rng, out_desc->comp[0].depth);
@@ -688,15 +668,10 @@ static int create_filtergraph(AVFilterContext *ctx,
             for (n = 0; n < 8; n++)
                 s->yuv_offset[1][n] = off;
             ff_fill_rgb2yuv_table(s->out_lumacoef, rgb2yuv);
-            bits = 1 << (29 - out_desc->comp[0].depth);
-            for (out_rng = s->out_y_rng, n = 0; n < 3; n++, out_rng = s->out_uv_rng) {
-                for (m = 0; m < 3; m++) {
-                    s->rgb2yuv_coeffs[n][m][0] = lrint(bits * out_rng * rgb2yuv[n][m] / 28672);
-                    for (o = 1; o < 8; o++)
-                        s->rgb2yuv_coeffs[n][m][o] = s->rgb2yuv_coeffs[n][m][0];
-                }
-            }
-            av_assert2(s->rgb2yuv_coeffs[1][2][0] == s->rgb2yuv_coeffs[2][0][0]);
+
+            ff_get_yuv_coeffs(s->rgb2yuv_coeffs, rgb2yuv, out_desc->comp[0].depth,
+                              s->out_y_rng, s->out_uv_rng, 0);
+
             s->rgb2yuv = s->dsp.rgb2yuv[(out_desc->comp[0].depth - 8) >> 1]
                                        [out_desc->log2_chroma_h + out_desc->log2_chroma_w];
             s->rgb2yuv_fsb = s->dsp.rgb2yuv_fsb[(out_desc->comp[0].depth - 8) >> 1]

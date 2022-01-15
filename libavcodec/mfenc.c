@@ -170,6 +170,10 @@ static int mf_enca_output_type_get(AVCodecContext *avctx, IMFMediaType *type)
         }
     }
 
+    hr = IMFAttributes_GetUINT32(type, &MF_MT_AUDIO_SAMPLES_PER_BLOCK, &sz);
+    if (!FAILED(hr) && sz > 0)
+        avctx->frame_size = sz;
+
     return 0;
 }
 
@@ -1162,7 +1166,7 @@ static int mf_close(AVCodecContext *avctx)
         .receive_packet = mf_receive_packet,                                   \
         EXTRA                                                                  \
         .capabilities   = AV_CODEC_CAP_DELAY | AV_CODEC_CAP_HYBRID |           \
-                          AV_CODEC_CAP_DR1,                                    \
+                          AV_CODEC_CAP_DR1 | AV_CODEC_CAP_VARIABLE_FRAME_SIZE, \
         .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE |                       \
                           FF_CODEC_CAP_INIT_CLEANUP,                           \
     };

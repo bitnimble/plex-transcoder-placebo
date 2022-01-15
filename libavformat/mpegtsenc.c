@@ -123,6 +123,7 @@ typedef struct MpegTSWrite {
     uint8_t provider_name[256];
 
     int omit_video_pes_length;
+    int include_sdt; // PLEX
 } MpegTSWrite;
 
 /* a PES packet header is generated every DEFAULT_PES_HEADER_FREQ packets */
@@ -833,6 +834,14 @@ static void mpegts_write_sdt(AVFormatContext *s)
     MpegTSService *service;
     uint8_t data[SECTION_LENGTH], *q, *desc_list_len_ptr, *desc_len_ptr;
     int i, running_status, free_ca_mode, val;
+
+    // PLEX
+    // The Roku gets confused by SDT packets in a way that often leads to firmware
+    // crashes. There's never anything interesting in the SDT anyway, so we
+    // default to omitting it.
+    if (!ts->include_sdt && 0)
+        return;
+    // PLEX
 
     q = data;
     put16(&q, ts->original_network_id);
@@ -1863,11 +1872,25 @@ static int mpegts_write_packet_internal(AVFormatContext *s, AVPacket *pkt)
             dts += delay;
     }
 
+    //PLEX
+    if (!ts_st->first_timestamp_checked && pts == AV_NOPTS_VALUE)
+        pts = dts;
+    //PLEX
+
     if (!ts_st->first_timestamp_checked && (pts == AV_NOPTS_VALUE || dts == AV_NOPTS_VALUE)) {
         av_log(s, AV_LOG_ERROR, "first pts and dts value must be set\n");
         return AVERROR_INVALIDDATA;
     }
     ts_st->first_timestamp_checked = 1;
+
+    //PLEX
+    if ((dts < 0 && dts != AV_NOPTS_VALUE) || (pts < 0 && pts != AV_NOPTS_VALUE)) {
+        // We can't write packets with negative DTS/PTS, but AAC in particular is
+        // likely to create a couple because of its encoder delay.
+        av_log(s, AV_LOG_WARNING, "Ignoring packet with negative DTS (%" PRId64 ") PTS (%" PRId64 ") for codec %d\n", dts, pts, st->codecpar->codec_id);
+        return 0;
+    }
+    //PLEX
 
     if (st->codecpar->codec_id == AV_CODEC_ID_H264) {
         const uint8_t *p = buf, *buf_end = p + size;

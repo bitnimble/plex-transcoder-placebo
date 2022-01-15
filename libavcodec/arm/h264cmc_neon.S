@@ -441,7 +441,6 @@ endfunc
         h264_chroma_mc2 put
         h264_chroma_mc2 avg
 
-#if CONFIG_RV40_DECODER
 const   rv40bias
         .short           0, 16, 32, 16
         .short          32, 28, 32, 28
@@ -453,11 +452,8 @@ endconst
         h264_chroma_mc8 avg, rv40
         h264_chroma_mc4 put, rv40
         h264_chroma_mc4 avg, rv40
-#endif
 
-#if CONFIG_VC1DSP
         h264_chroma_mc8 put, vc1
         h264_chroma_mc8 avg, vc1
         h264_chroma_mc4 put, vc1
         h264_chroma_mc4 avg, vc1
-#endif

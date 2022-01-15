@@ -903,7 +903,7 @@ static void prescale_down_mix(DCAXllChSet *c, DCAXllChSet *o)
 
 static int parse_sub_headers(DCAXllDecoder *s, DCAExssAsset *asset)
 {
-    DCAContext *dca = s->avctx->priv_data;
+    DCAContext *dca = s->avctx ? s->avctx->priv_data : NULL;
     DCAXllChSet *c;
     int i, ret;
 
@@ -933,7 +933,7 @@ static int parse_sub_headers(DCAXllDecoder *s, DCAExssAsset *asset)
     }
 
     // Determine number of active channel sets to decode
-    switch (dca->request_channel_layout) {
+    switch (dca ? dca->request_channel_layout : 0) {
     case DCA_SPEAKER_LAYOUT_STEREO:
         s->nactivechsets = 1;
         break;
@@ -1176,6 +1176,7 @@ int ff_dca_xll_parse(DCAXllDecoder *s, uint8_t *data, DCAExssAsset *asset)
     return ret;
 }
 
+#if 0
 static void undo_down_mix(DCAXllDecoder *s, DCAXllChSet *o, int band)
 {
     int i, j, k, nchannels = 0, *coeff_ptr = o->dmix_coeff;
@@ -1468,6 +1469,7 @@ int ff_dca_xll_filter_frame(DCAXllDecoder *s, AVFrame *frame)
 
     return 0;
 }
+#endif
 
 av_cold void ff_dca_xll_flush(DCAXllDecoder *s)
 {

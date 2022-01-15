@@ -439,6 +439,27 @@ static void flush_if_needed(AVFormatContext *s)
     }
 }
 
+static int write_header_internal(AVFormatContext *s)
+{
+    FFFormatContext *const si = ffformatcontext(s);
+
+    if (!(s->oformat->flags & AVFMT_NOFILE) && s->pb)
+        avio_write_marker(s->pb, AV_NOPTS_VALUE, AVIO_DATA_MARKER_HEADER);
+    if (s->oformat->write_header) {
+        int ret = s->oformat->write_header(s);
+        if (ret >= 0 && s->pb && s->pb->error < 0)
+            ret = s->pb->error;
+        si->write_header_ret = ret;
+        if (ret < 0)
+            return ret;
+        flush_if_needed(s);
+    }
+    si->header_written = 1;
+    if (!(s->oformat->flags & AVFMT_NOFILE) && s->pb)
+        avio_write_marker(s->pb, AV_NOPTS_VALUE, AVIO_DATA_MARKER_UNKNOWN);
+    return 0;
+}
+
 static void deinit_muxer(AVFormatContext *s)
 {
     FFFormatContext *const si = ffformatcontext(s);
@@ -480,18 +501,11 @@ int avformat_write_header(AVFormatContext *s, AVDictionary **options)
         if ((ret = avformat_init_output(s, options)) < 0)
             return ret;
 
-    if (!(s->oformat->flags & AVFMT_NOFILE) && s->pb)
-        avio_write_marker(s->pb, AV_NOPTS_VALUE, AVIO_DATA_MARKER_HEADER);
-    if (s->oformat->write_header) {
-        ret = s->oformat->write_header(s);
-        if (ret >= 0 && s->pb && s->pb->error < 0)
-            ret = s->pb->error;
+    if (!(s->oformat->check_bitstream && s->flags & AVFMT_FLAG_AUTO_BSF)) {
+        ret = write_header_internal(s);
         if (ret < 0)
             goto fail;
-        flush_if_needed(s);
     }
-    if (!(s->oformat->flags & AVFMT_NOFILE) && s->pb)
-        avio_write_marker(s->pb, AV_NOPTS_VALUE, AVIO_DATA_MARKER_UNKNOWN);
 
     if (!si->streams_initialized) {
         if ((ret = init_pts(s)) < 0)
@@ -567,7 +581,9 @@ static int compute_muxer_pkt_fields(AVFormatContext *s, AVStream *st, AVPacket *
         av_log(s, AV_LOG_ERROR,
                "Application provided invalid, non monotonically increasing dts to muxer in stream %d: %s >= %s\n",
                st->index, av_ts2str(sti->cur_dts), av_ts2str(pkt->dts));
+#if 0 //PLEX
         return AVERROR(EINVAL);
+#endif //PLEX
     }
     if (pkt->dts != AV_NOPTS_VALUE && pkt->pts != AV_NOPTS_VALUE && pkt->pts < pkt->dts) {
         av_log(s, AV_LOG_ERROR,
@@ -710,6 +726,12 @@ static int write_packet(AVFormatContext *s, AVPacket *pkt)
         }
     }
 
+    if (!si->header_written) {
+        ret = si->write_header_ret ? si->write_header_ret : write_header_internal(s);
+        if (ret < 0)
+            goto fail;
+    }
+
     if ((pkt->flags & AV_PKT_FLAG_UNCODED_FRAME)) {
         AVFrame **frame = (AVFrame **)pkt->data;
         av_assert0(pkt->size == sizeof(*frame));
@@ -724,6 +746,7 @@ static int write_packet(AVFormatContext *s, AVPacket *pkt)
             ret = s->pb->error;
     }
 
+fail:
     if (ret >= 0)
         st->nb_frames++;
 
@@ -913,6 +936,7 @@ int ff_interleave_packet_per_dts(AVFormatContext *s, AVPacket *pkt,
 {
     FFFormatContext *const si = ffformatcontext(s);
     int stream_count = 0;
+    int sparse_count = 0;
     int noninterleaved_count = 0;
     int ret;
     int eof = flush;
@@ -928,6 +952,10 @@ int ff_interleave_packet_per_dts(AVFormatContext *s, AVPacket *pkt,
         const AVCodecParameters *const par = st->codecpar;
         if (sti->last_in_packet_buffer) {
             ++stream_count;
+        } else if (par->codec_type == AVMEDIA_TYPE_SUBTITLE ||
+                   par->codec_type == AVMEDIA_TYPE_DATA ||
+                   s->streams[i]->disposition & AV_DISPOSITION_ATTACHED_PIC) {
+            ++sparse_count;
         } else if (par->codec_type != AVMEDIA_TYPE_ATTACHMENT &&
                    par->codec_id != AV_CODEC_ID_VP8 &&
                    par->codec_id != AV_CODEC_ID_VP9) {
@@ -938,10 +966,13 @@ int ff_interleave_packet_per_dts(AVFormatContext *s, AVPacket *pkt,
     if (si->nb_interleaved_streams == stream_count)
         flush = 1;
 
-    if (s->max_interleave_delta > 0 &&
-        si->packet_buffer.head &&
+    if (si->packet_buffer.head &&
         !flush &&
-        si->nb_interleaved_streams == stream_count+noninterleaved_count
+        ((s->max_interleave_delta > 0 &&
+          si->nb_interleaved_streams == stream_count+sparse_count+noninterleaved_count) ||
+         (s->max_sparse_interleave_delta > 0 &&
+          sparse_count &&
+          si->nb_interleaved_streams == stream_count+sparse_count))
     ) {
         AVPacket *const top_pkt = &si->packet_buffer.head->pkt;
         int64_t delta_dts = INT64_MIN;
@@ -964,11 +995,22 @@ int ff_interleave_packet_per_dts(AVFormatContext *s, AVPacket *pkt,
             delta_dts = FFMAX(delta_dts, last_dts - top_dts);
         }
 
-        if (delta_dts > s->max_interleave_delta) {
+        if (s->max_interleave_delta > 0 &&
+            delta_dts > s->max_interleave_delta &&
+            si->nb_interleaved_streams == stream_count+sparse_count+noninterleaved_count) {
             av_log(s, AV_LOG_DEBUG,
                    "Delay between the first packet and last packet in the "
                    "muxing queue is %"PRId64" > %"PRId64": forcing output\n",
                    delta_dts, s->max_interleave_delta);
+            flush = 1;
+        } else if (s->max_sparse_interleave_delta > 0 &&
+                   delta_dts > s->max_sparse_interleave_delta &&
+                   si->nb_interleaved_streams == stream_count+sparse_count) {
+            av_log(s, AV_LOG_DEBUG,
+                   "Delay between the first packet and last packet in the "
+                   "muxing queue is %"PRId64" > %"PRId64" and all delayed "
+                   "streams are sparse: forcing output\n",
+                   delta_dts, s->max_sparse_interleave_delta);
             flush = 1;
         }
     }
@@ -1261,7 +1303,11 @@ int av_write_trailer(AVFormatContext *s)
     if (ret >= 0)
         ret = ret1;
 
-    if (s->oformat->write_trailer) {
+    if (!si->header_written) {
+        ret = si->write_header_ret ? si->write_header_ret : write_header_internal(s);
+    }
+
+    if (si->header_written && s->oformat->write_trailer) {
         if (!(s->oformat->flags & AVFMT_NOFILE) && s->pb)
             avio_write_marker(s->pb, AV_NOPTS_VALUE, AVIO_DATA_MARKER_TRAILER);
         if (ret >= 0) {

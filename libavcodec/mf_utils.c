@@ -288,10 +288,12 @@ static struct GUID_Entry guid_names[] = {
     GUID_ENTRY(MFAudioFormat_AAC),
     GUID_ENTRY(MFAudioFormat_MP3),
     GUID_ENTRY(MFAudioFormat_MSP1),
+    GUID_ENTRY(ff_MFAudioFormat_MSAUDIO1),
     GUID_ENTRY(MFAudioFormat_WMAudioV8),
     GUID_ENTRY(MFAudioFormat_WMAudioV9),
     GUID_ENTRY(MFAudioFormat_WMAudio_Lossless),
     GUID_ENTRY(MF_MT_ALL_SAMPLES_INDEPENDENT),
+    GUID_ENTRY(MF_MT_AM_FORMAT_TYPE),
     GUID_ENTRY(MF_MT_COMPRESSED),
     GUID_ENTRY(MF_MT_FIXED_SIZE_SAMPLES),
     GUID_ENTRY(MF_MT_SAMPLE_SIZE),
@@ -313,8 +315,10 @@ static struct GUID_Entry guid_names[] = {
     GUID_ENTRY(MF_MT_AUDIO_WMADRC_AVGTARGET),
     GUID_ENTRY(MF_MT_AUDIO_WMADRC_PEAKREF),
     GUID_ENTRY(MF_MT_AUDIO_WMADRC_PEAKTARGET),
+    GUID_ENTRY(MF_MT_ORIGINAL_WAVE_FORMAT_TAG),
     GUID_ENTRY(MF_MT_AVG_BIT_ERROR_RATE),
     GUID_ENTRY(MF_MT_AVG_BITRATE),
+    GUID_ENTRY(MF_MT_CUSTOM_VIDEO_PRIMARIES),
     GUID_ENTRY(MF_MT_DEFAULT_STRIDE),
     GUID_ENTRY(MF_MT_DRM_FLAGS),
     GUID_ENTRY(MF_MT_FRAME_RATE),
@@ -330,6 +334,7 @@ static struct GUID_Entry guid_names[] = {
     GUID_ENTRY(MF_MT_MPEG2_FLAGS),
     GUID_ENTRY(MF_MT_MPEG2_LEVEL),
     GUID_ENTRY(MF_MT_MPEG2_PROFILE),
+    GUID_ENTRY(MF_MT_ORIGINAL_4CC),
     GUID_ENTRY(MF_MT_PAD_CONTROL_FLAGS),
     GUID_ENTRY(MF_MT_PALETTE),
     GUID_ENTRY(MF_MT_PAN_SCAN_APERTURE),
@@ -341,7 +346,6 @@ static struct GUID_Entry guid_names[] = {
     GUID_ENTRY(MF_MT_VIDEO_LIGHTING),
     GUID_ENTRY(MF_MT_VIDEO_NOMINAL_RANGE),
     GUID_ENTRY(MF_MT_VIDEO_PRIMARIES),
-    GUID_ENTRY(MF_MT_VIDEO_ROTATION),
     GUID_ENTRY(MF_MT_YUV_MATRIX),
     GUID_ENTRY(ff_CODECAPI_AVDecVideoThumbnailGenerationMode),
     GUID_ENTRY(ff_CODECAPI_AVDecVideoDropPicWithMissingRef),
@@ -542,8 +546,16 @@ const CLSID *ff_codec_to_mf_subtype(enum AVCodecID codec)
     case AV_CODEC_ID_H264:              return &MFVideoFormat_H264;
     case AV_CODEC_ID_HEVC:              return &ff_MFVideoFormat_HEVC;
     case AV_CODEC_ID_AC3:               return &MFAudioFormat_Dolby_AC3;
+    case AV_CODEC_ID_EAC3:              return &MFAudioFormat_Dolby_DDPlus;
     case AV_CODEC_ID_AAC:               return &MFAudioFormat_AAC;
+    case AV_CODEC_ID_MP1:               return &MFAudioFormat_MPEG;
+    case AV_CODEC_ID_MP2:               return &MFAudioFormat_MPEG;
     case AV_CODEC_ID_MP3:               return &MFAudioFormat_MP3;
+    case AV_CODEC_ID_WMAVOICE:          return &MFAudioFormat_MSP1;
+    case AV_CODEC_ID_WMAV1:             return &ff_MFAudioFormat_MSAUDIO1;
+    case AV_CODEC_ID_WMAV2:             return &MFAudioFormat_WMAudioV8;
+    case AV_CODEC_ID_WMAPRO:            return &MFAudioFormat_WMAudioV9;
+    case AV_CODEC_ID_WMALOSSLESS:       return &MFAudioFormat_WMAudio_Lossless;
     default:                            return NULL;
     }
 }

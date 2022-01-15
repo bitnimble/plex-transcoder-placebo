@@ -43,6 +43,8 @@ typedef struct AACAC3ParseContext {
     int header_size;
     int (*sync)(uint64_t state, struct AACAC3ParseContext *hdr_info,
             int *need_next_header, int *new_frame_start);
+    int (*parse_full)(AVCodecParserContext *s1, AVCodecContext *avctx,
+                      const uint8_t *buf, int buf_size);
 
     int channels;
     int sample_rate;
@@ -50,6 +52,7 @@ typedef struct AACAC3ParseContext {
     int samples;
     uint64_t channel_layout;
     int service_type;
+    int profile;
 
     int remaining_size;
     uint64_t state;

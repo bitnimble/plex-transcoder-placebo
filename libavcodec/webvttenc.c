@@ -113,7 +113,12 @@ static void webvtt_style_apply(WebVTTContext *s, const char *style)
 static void webvtt_text_cb(void *priv, const char *text, int len)
 {
     WebVTTContext *s = priv;
-    av_bprint_append_data(&s->buffer, text, len);
+    char *buf = av_strndup(text, len);
+    if (!buf)
+        return;
+
+    av_bprint_escape(&s->buffer, buf, NULL, AV_ESCAPE_MODE_XML, 0);
+    av_free(buf);
 }
 
 static void webvtt_new_line_cb(void *priv, int forced)

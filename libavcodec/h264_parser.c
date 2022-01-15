@@ -563,6 +563,10 @@ static inline int parse_nal_units(AVCodecParserContext *s,
                           sps->num_units_in_tick * avctx->ticks_per_frame, den, 1 << 30);
             }
 
+            //PLEX
+            ff_set_sar(avctx, sps->sar);
+            //PLEX
+
             av_freep(&rbsp.rbsp_buffer);
             return 0; /* no need to evaluate the rest */
         }
@@ -626,6 +630,9 @@ static int h264_parse(AVCodecParserContext *s,
         s->dts_ref_dts_delta = INT_MIN;
         s->pts_dts_delta     = INT_MIN;
     }
+
+    if (p->sei.a53_caption.buf_ref)
+        avctx->properties |= FF_CODEC_PROPERTY_CLOSED_CAPTIONS;
 
     if (s->flags & PARSER_FLAG_ONCE) {
         s->flags &= PARSER_FLAG_COMPLETE_FRAMES;

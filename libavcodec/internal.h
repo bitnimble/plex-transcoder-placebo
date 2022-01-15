@@ -327,6 +327,8 @@ int ff_get_format(AVCodecContext *avctx, const enum AVPixelFormat *fmt);
  */
 AVCPBProperties *ff_add_cpb_side_data(AVCodecContext *avctx);
 
+void ff_avcodec_scan_new_things(void);
+
 /**
  * Check AVFrame for S12M timecode side data and allocate and fill TC SEI message with timecode info
  *

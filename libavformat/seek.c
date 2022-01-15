@@ -241,6 +241,15 @@ int av_index_search_timestamp(AVStream *st, int64_t wanted_timestamp, int flags)
                                      wanted_timestamp, flags);
 }
 
+//PLEX
+const AVIndexEntry *avformat_get_index(AVStream *st, int *nb_entries)
+{
+    FFStream *sti = ffstream(st);
+    *nb_entries = sti->nb_index_entries;
+    return sti->index_entries;
+}
+//PLEX
+
 int avformat_index_get_entries_count(const AVStream *st)
 {
     return cffstream(st)->nb_index_entries;

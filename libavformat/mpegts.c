@@ -614,7 +614,7 @@ static int get_packet_size(AVFormatContext* s)
     while (buf_size < PROBE_PACKET_MAX_BUF && max_iterations--) {
         ret = avio_read_partial(s->pb, buf + buf_size, PROBE_PACKET_MAX_BUF - buf_size);
         if (ret < 0)
-            return AVERROR_INVALIDDATA;
+            return ret;
         buf_size += ret;
 
         score      = analyze(buf, buf_size, TS_PACKET_SIZE,      0);
@@ -972,6 +972,11 @@ static int mpegts_set_stream_info(AVStream *st, PESContext *pes,
         st->codecpar->codec_type = AVMEDIA_TYPE_DATA;
         st->codecpar->codec_id   = AV_CODEC_ID_BIN_DATA;
         sti->request_probe = AVPROBE_SCORE_STREAM_RETRY / 5;
+    }
+    if (st->codecpar->codec_id == AV_CODEC_ID_NONE && stream_type == STREAM_TYPE_PRIVATE_SECTION) {
+        // These don't carry any packet data
+        st->codecpar->codec_type = AVMEDIA_TYPE_DATA;
+        st->codecpar->codec_id   = AV_CODEC_ID_BIN_DATA;
     }
 
     /* queue a context update if properties changed */
@@ -2902,6 +2907,8 @@ static int mpegts_resync(AVFormatContext *s, int seekback, const uint8_t *curren
 
     for (i = 0; i < ts->resync_size; i++) {
         c = avio_r8(pb);
+        if (pb->error)
+            return pb->error;
         if (avio_feof(pb))
             return AVERROR_EOF;
         if (c == 0x47) {
@@ -2935,8 +2942,13 @@ static int read_packet(AVFormatContext *s, uint8_t *buf, int raw_packet_size,
 
     for (;;) {
         len = ffio_read_indirect(pb, buf, TS_PACKET_SIZE, data);
-        if (len != TS_PACKET_SIZE)
-            return len < 0 ? len : AVERROR_EOF;
+        if (len != TS_PACKET_SIZE) {
+            if (len < 0)
+                return len;
+            if (pb->error)
+                return pb->error;
+            return AVERROR_EOF;
+        }
         /* check packet sync byte */
         if ((*data)[0] != 0x47) {
             /* find a new packet start */
@@ -3106,6 +3118,8 @@ static int mpegts_read_header(AVFormatContext *s)
     pos = avio_tell(pb);
     ts->raw_packet_size = get_packet_size(s);
     if (ts->raw_packet_size <= 0) {
+        if (ts->raw_packet_size != AVERROR_INVALIDDATA && ts->raw_packet_size != AVERROR_EOF)
+            return ts->raw_packet_size;
         av_log(s, AV_LOG_WARNING, "Could not detect TS packet size, defaulting to non-FEC/DVHS\n");
         ts->raw_packet_size = TS_PACKET_SIZE;
     }
@@ -3122,7 +3136,7 @@ static int mpegts_read_header(AVFormatContext *s)
         mpegts_open_section_filter(ts, PAT_PID, pat_cb, ts, 1);
         mpegts_open_section_filter(ts, EIT_PID, eit_cb, ts, 1);
 
-        handle_packets(ts, probesize / ts->raw_packet_size);
+        handle_packets(ts, 1000); //PLEX: hardcoded low packet count; relying on find_stream_info
         /* if could not find service, enable auto_guess */
 
         ts->auto_guess = 1;

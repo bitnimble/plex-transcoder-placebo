@@ -283,6 +283,23 @@ static const enum AVPixelFormat pix_fmts[] = {
     AV_PIX_FMT_NONE
 };
 
+void ff_yadif_init(YADIFContext *s)
+{
+    if (s->csp->comp[0].depth > 8) {
+        s->filter_line  = filter_line_c_16bit;
+        s->filter_edges = filter_edges_16bit;
+    } else {
+        s->filter_line  = filter_line_c;
+        s->filter_edges = filter_edges;
+    }
+
+    if (ARCH_AARCH64)
+        ff_yadif_init_aarch64(s);
+
+    if (ARCH_X86)
+        ff_yadif_init_x86(s);
+}
+
 static int config_output(AVFilterLink *outlink)
 {
     AVFilterContext *ctx = outlink->src;
@@ -303,16 +320,8 @@ static int config_output(AVFilterLink *outlink)
 
     s->csp = av_pix_fmt_desc_get(outlink->format);
     s->filter = filter;
-    if (s->csp->comp[0].depth > 8) {
-        s->filter_line  = filter_line_c_16bit;
-        s->filter_edges = filter_edges_16bit;
-    } else {
-        s->filter_line  = filter_line_c;
-        s->filter_edges = filter_edges;
-    }
 
-    if (ARCH_X86)
-        ff_yadif_init_x86(s);
+    ff_yadif_init(s);
 
     return 0;
 }

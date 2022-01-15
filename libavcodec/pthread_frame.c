@@ -871,6 +871,7 @@ int ff_frame_thread_init(AVCodecContext *avctx)
         return err;
     }
 
+    avctx->thread_safe_callbacks = 1;
     fctx->async_lock = 1;
     fctx->delaying = 1;
 

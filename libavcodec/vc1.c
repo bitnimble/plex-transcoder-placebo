@@ -1708,7 +1708,9 @@ av_cold void ff_vc1_init_common(VC1Context *v)
     v->pq      = -1;
     v->mvrange = 0; /* 7.1.1.18, p80 */
 
+#if CONFIG_VC1_DECODER
     ff_vc1dsp_init(&v->vc1dsp);
+#endif
 
     /* VLC tables */
     ff_thread_once(&init_static_once, vc1_init_static);

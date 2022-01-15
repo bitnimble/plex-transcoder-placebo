@@ -141,6 +141,10 @@ int avcodec_parameters_from_context(AVCodecParameters *par,
         par->extradata_size = codec->extradata_size;
     }
 
+    //PLEX
+        par->separate_fields = codec->separate_fields;
+    //PLEX
+
     return 0;
 }
 

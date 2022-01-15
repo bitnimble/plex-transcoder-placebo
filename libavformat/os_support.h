@@ -29,7 +29,10 @@
 
 #include "config.h"
 
+#include <stdlib.h>
 #include <sys/stat.h>
+
+#include "libavutil/mem.h"
 
 #ifdef _WIN32
 #if HAVE_DIRECT_H
@@ -147,14 +150,14 @@ int ff_poll(struct pollfd *fds, nfds_t numfds, int timeout);
 #include <windows.h>
 #include "libavutil/wchar_filename.h"
 
-#define DEF_FS_FUNCTION(name, wfunc, afunc)               \
-static inline int win32_##name(const char *filename_utf8) \
+#define DEF_FS_FUNCTION3(rettype, retfail, name, wfunc, afunc) \
+static inline rettype win32_##name(const char *filename_utf8) \
 {                                                         \
     wchar_t *filename_w;                                  \
-    int ret;                                              \
+    rettype ret;                                          \
                                                           \
     if (utf8towchar(filename_utf8, &filename_w))          \
-        return -1;                                        \
+        return retfail;                                   \
     if (!filename_w)                                      \
         goto fallback;                                    \
                                                           \
@@ -166,6 +169,8 @@ fallback:                                                 \
     /* filename may be be in CP_ACP */                    \
     return afunc(filename_utf8);                          \
 }
+
+#define DEF_FS_FUNCTION(name, wfunc, afunc) DEF_FS_FUNCTION3(int, -1, name, wfunc, afunc)
 
 DEF_FS_FUNCTION(unlink, _wunlink, _unlink)
 DEF_FS_FUNCTION(mkdir,  _wmkdir,  _mkdir)
@@ -211,7 +216,7 @@ static inline int win32_rename(const char *src_utf8, const char *dest_utf8)
         goto fallback;
     }
 
-    ret = MoveFileExW(src_w, dest_w, MOVEFILE_REPLACE_EXISTING);
+    ret = !MoveFileExW(src_w, dest_w, MOVEFILE_REPLACE_EXISTING);
     av_free(src_w);
     av_free(dest_w);
     // Lacking proper mapping from GetLastError() error codes to errno codes
@@ -244,6 +249,32 @@ fallback:
 #define rmdir       win32_rmdir
 #define unlink      win32_unlink
 #define access      win32_access
+
+static inline char *ff_getenv(const char *name)
+{
+    size_t max = 32767; // documented maximum
+    wchar_t *wenv = av_mallocz_array(max + 1, sizeof(wchar_t));
+    wchar_t *wname;
+    char *env = NULL;
+    (void)utf8towchar(name, &wname);
+    if (!wenv || !wname)
+        goto done;
+    if (!GetEnvironmentVariableW(wname, wenv, max))
+        goto done;
+    (void)wchartoutf8(wenv, &env);
+done:
+    av_free(wenv);
+    av_free(wname);
+    return env;
+}
+
+#else
+
+static inline char *ff_getenv(const char *name)
+{
+    char *env = getenv(name);
+    return env ? av_strdup(env) : NULL;
+}
 
 #endif
 

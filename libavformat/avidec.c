@@ -1422,8 +1422,8 @@ static int ni_prepare_read(AVFormatContext *s)
     if (i >= 0) {
         int64_t pos = best_sti->index_entries[i].pos;
         pos += best_ast->packet_size - best_ast->remaining;
-        if (avio_seek(s->pb, pos + 8, SEEK_SET) < 0)
-          return AVERROR_EOF;
+        if ((pos = avio_seek(s->pb, pos + 8, SEEK_SET)) < 0)
+          return pos;
 
         av_assert0(best_ast->remaining <= best_ast->packet_size);
 

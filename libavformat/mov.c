@@ -659,7 +659,7 @@ static int mov_read_dref(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 
             for (type = 0; type != -1 && avio_tell(pb) < next; ) {
                 if (avio_feof(pb))
-                    return AVERROR_EOF;
+                    return pb->error ? pb->error : AVERROR_EOF;
                 type = avio_rb16(pb);
                 len = avio_rb16(pb);
                 av_log(c->fc, AV_LOG_DEBUG, "type %d, len %d\n", type, len);
@@ -2054,9 +2054,9 @@ static int mov_read_stco(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 
     sc->chunk_count = i;
 
-    if (pb->eof_reached) {
+    if (avio_feof(pb)) {
         av_log(c->fc, AV_LOG_WARNING, "reached eof, corrupted STCO atom\n");
-        return AVERROR_EOF;
+        return pb->error ? pb->error : AVERROR_EOF;
     }
 
     return 0;
@@ -2576,9 +2576,9 @@ int ff_mov_read_stsd_entries(MOVContext *c, AVIOContext *pb, int entries)
         sc->stsd_count++;
     }
 
-    if (pb->eof_reached) {
+    if (avio_feof(pb)) {
         av_log(c->fc, AV_LOG_WARNING, "reached eof, corrupted STSD atom\n");
-        return AVERROR_EOF;
+        return pb->error ? pb->error : AVERROR_EOF;
     }
 
     return 0;
@@ -2716,9 +2716,9 @@ static int mov_read_stsc(MOVContext *c, AVIOContext *pb, MOVAtom atom)
         }
     }
 
-    if (pb->eof_reached) {
+    if (avio_feof(pb)) {
         av_log(c->fc, AV_LOG_WARNING, "reached eof, corrupted STSC atom\n");
-        return AVERROR_EOF;
+        return pb->error ? pb->error : AVERROR_EOF;
     }
 
     return 0;
@@ -2773,9 +2773,9 @@ static int mov_read_stps(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 
     sc->stps_count = i;
 
-    if (pb->eof_reached) {
+    if (avio_feof(pb)) {
         av_log(c->fc, AV_LOG_WARNING, "reached eof, corrupted STPS atom\n");
-        return AVERROR_EOF;
+        return pb->error ? pb->error : AVERROR_EOF;
     }
 
     return 0;
@@ -2823,9 +2823,9 @@ static int mov_read_stss(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 
     sc->keyframe_count = i;
 
-    if (pb->eof_reached) {
+    if (avio_feof(pb)) {
         av_log(c->fc, AV_LOG_WARNING, "reached eof, corrupted STSS atom\n");
-        return AVERROR_EOF;
+        return pb->error ? pb->error : AVERROR_EOF;
     }
 
     return 0;
@@ -3007,9 +3007,9 @@ static int mov_read_stts(MOVContext *c, AVIOContext *pb, MOVAtom atom)
         sc->nb_frames_for_fps += total_sample_count;
     }
 
-    if (pb->eof_reached) {
+    if (avio_feof(pb)) {
         av_log(c->fc, AV_LOG_WARNING, "reached eof, corrupted STTS atom\n");
-        return AVERROR_EOF;
+        return pb->error ? pb->error : AVERROR_EOF;
     }
 
     st->nb_frames= total_sample_count;
@@ -3120,7 +3120,7 @@ static int mov_read_ctts(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 
     sc->ctts_count = ctts_count;
 
-    if (pb->eof_reached) {
+    if (avio_feof(pb)) {
         av_log(c->fc, AV_LOG_WARNING, "reached eof, corrupted CTTS atom\n");
         return AVERROR_EOF;
     }
@@ -3169,9 +3169,9 @@ static int mov_read_sbgp(MOVContext *c, AVIOContext *pb, MOVAtom atom)
 
     sc->rap_group_count = i;
 
-    if (pb->eof_reached) {
+    if (avio_feof(pb)) {
         av_log(c->fc, AV_LOG_WARNING, "reached eof, corrupted SBGP atom\n");
-        return AVERROR_EOF;
+        return pb->error ? pb->error : AVERROR_EOF;
     }
 
     return 0;
@@ -5048,9 +5048,9 @@ static int mov_read_trun(MOVContext *c, AVIOContext *pb, MOVAtom atom)
     fix_frag_index_entries(&c->frag_index, next_frag_index,
                            frag->track_id, entries);
 
-    if (pb->eof_reached) {
+    if (avio_feof(pb)) {
         av_log(c->fc, AV_LOG_WARNING, "reached eof, corrupted TRUN atom\n");
-        return AVERROR_EOF;
+        return pb->error ? pb->error : AVERROR_EOF;
     }
 
     frag->implicit_offset = offset;
@@ -7512,6 +7512,8 @@ static void mov_read_chapters(AVFormatContext *s)
 
         if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
             st->disposition |= AV_DISPOSITION_ATTACHED_PIC | AV_DISPOSITION_TIMED_THUMBNAILS;
+            if (mov->ignore_chapters)
+                continue;
             if (sti->nb_index_entries) {
                 // Retrieve the first frame, if possible
                 AVIndexEntry *sample = &sti->index_entries[0];
@@ -7527,6 +7529,8 @@ static void mov_read_chapters(AVFormatContext *s)
             st->codecpar->codec_type = AVMEDIA_TYPE_DATA;
             st->codecpar->codec_id = AV_CODEC_ID_BIN_DATA;
             st->discard = AVDISCARD_ALL;
+            if (mov->ignore_chapters)
+                continue;
             for (int i = 0; i < sti->nb_index_entries; i++) {
                 AVIndexEntry *sample = &sti->index_entries[i];
                 int64_t end = i+1 < sti->nb_index_entries ? sti->index_entries[i+1].timestamp : st->duration;
@@ -7901,6 +7905,9 @@ static int mov_read_header(AVFormatContext *s)
     else
         atom.size = INT64_MAX;
 
+    if (mov->header_size > 0)
+        atom.size = mov->header_size;
+
     /* check MOV header */
     do {
         if (mov->moov_retry)
@@ -7916,8 +7923,11 @@ static int mov_read_header(AVFormatContext *s)
     }
     av_log(mov->fc, AV_LOG_TRACE, "on_parse_exit_offset=%"PRId64"\n", avio_tell(pb));
 
+    if (mov->header_size > 0)
+        mov->next_root_atom = mov->header_size;
+
     if (pb->seekable & AVIO_SEEKABLE_NORMAL) {
-        if (mov->nb_chapter_tracks > 0 && !mov->ignore_chapters)
+        if (mov->nb_chapter_tracks > 0)
             mov_read_chapters(s);
         for (i = 0; i < s->nb_streams; i++)
             if (s->streams[i]->codecpar->codec_tag == AV_RL32("tmcd")) {
@@ -8153,7 +8163,7 @@ static int mov_switch_root(AVFormatContext *s, int64_t target, int index)
     if (ret < 0)
         return ret;
     if (avio_feof(s->pb))
-        return AVERROR_EOF;
+        return s->pb->error ? s->pb->error : AVERROR_EOF;
     av_log(s, AV_LOG_TRACE, "read fragments, offset 0x%"PRIx64"\n", avio_tell(s->pb));
 
     return 1;
@@ -8546,7 +8556,9 @@ static const AVOption mov_options[] = {
     { "enable_drefs", "Enable external track support.", OFFSET(enable_drefs), AV_OPT_TYPE_BOOL,
         {.i64 = 0}, 0, 1, FLAGS },
     { "max_stts_delta", "treat offsets above this value as invalid", OFFSET(max_stts_delta), AV_OPT_TYPE_INT, {.i64 = UINT_MAX-48000*10 }, 0, UINT_MAX, .flags = AV_OPT_FLAG_DECODING_PARAM },
-
+    { "header_size", "size of initial header, ",
+        OFFSET(header_size), AV_OPT_TYPE_INT64, {.i64 = -1},
+        -1, INT64_MAX, FLAGS },
     { NULL },
 };
 

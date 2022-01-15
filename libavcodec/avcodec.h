@@ -1798,6 +1798,14 @@ typedef struct AVCodecContext {
      */
     uint16_t *chroma_intra_matrix;
 
+//PLEX
+    /**
+     * Whether or not an H.264 scaling matrix is present
+     * - decoding: Set by h264 decoder
+     */
+    int scaling_matrix_present;
+//PLEX
+
     /**
      * dump format separator.
      * can be ", " or "\n      " or anything else
@@ -1956,6 +1964,10 @@ typedef struct AVCodecContext {
      * used as reference pictures).
      */
     int extra_hw_frames;
+
+//PLEX
+    int separate_fields;
+//PLEX
 
     /**
      * The percentage of damaged samples to discard a frame.
@@ -2138,6 +2150,12 @@ typedef struct AVHWAccel {
      * @return zero if successful, a negative value otherwise
      */
     int (*end_frame)(AVCodecContext *avctx);
+
+    /**
+     * Can be used to mutate the AVFrame returned to the user in some way. Is
+     * always called on the frame immediately returned to the user.
+     */
+    int (*finish_frame)(AVCodecContext *avctx, AVFrame *frame);
 
     /**
      * Size of per-frame hardware accelerator private data.
@@ -2809,6 +2827,8 @@ typedef struct AVCodecParserContext {
 /// Set if the parser has a valid file offset
 #define PARSER_FLAG_FETCHED_OFFSET            0x0004
 #define PARSER_FLAG_USE_CODEC_TS              0x1000
+
+#define PARSER_FLAG_SKIP                      0x800000
 
     int64_t offset;      ///< byte offset from starting packet start
     int64_t cur_frame_end[AV_PARSER_PTS_NB];

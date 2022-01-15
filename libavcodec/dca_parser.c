@@ -23,12 +23,21 @@
  */
 
 #include "dca.h"
+#include "dcadata.h"
 #include "dca_core.h"
 #include "dca_exss.h"
+#include "dca_xll.h"
 #include "dca_lbr.h"
 #include "dca_syncwords.h"
 #include "get_bits.h"
 #include "parser.h"
+#include "libavutil/crc.h"
+
+enum ExtAudioType {
+    EXT_AUDIO_XCH   = 0,
+    EXT_AUDIO_X96   = 2,
+    EXT_AUDIO_XXCH  = 6
+};
 
 typedef struct DCAParseContext {
     ParseContext pc;
@@ -185,12 +194,78 @@ static av_cold int dca_parse_init(AVCodecParserContext *s)
 {
     DCAParseContext *pc1 = s->priv_data;
 
+    s->flags |= PARSER_FLAG_ONCE; //PLEX
+
     pc1->lastmarker = 0;
     pc1->sr_code = -1;
     return 0;
 }
 
-static int dca_parse_params(DCAParseContext *pc1, const uint8_t *buf,
+static int64_t get_channel_layout(int dca_mask)
+{
+    static const uint8_t dca2wav_norm[28] = {
+         2,  0, 1, 9, 10,  3,  8,  4,  5,  9, 10, 6, 7, 12,
+        13, 14, 3, 6,  7, 11, 12, 14, 16, 15, 17, 8, 4,  5,
+    };
+
+    static const uint8_t dca2wav_wide[28] = {
+         2,  0, 1, 4,  5,  3,  8,  4,  5,  9, 10, 6, 7, 12,
+        13, 14, 3, 9, 10, 11, 12, 14, 16, 15, 17, 8, 4,  5,
+    };
+
+    int dca_ch;
+    int wav_mask = 0;
+    const uint8_t *dca2wav;
+    if (dca_mask == DCA_SPEAKER_LAYOUT_7POINT0_WIDE ||
+        dca_mask == DCA_SPEAKER_LAYOUT_7POINT1_WIDE)
+        dca2wav = dca2wav_wide;
+    else
+        dca2wav = dca2wav_norm;
+    for (dca_ch = 0; dca_ch < 28; dca_ch++) {
+        if (dca_mask & (1 << dca_ch)) {
+            int wav_ch = dca2wav[dca_ch];
+            wav_mask |= 1 << wav_ch;
+        }
+    }
+    return wav_mask;
+}
+
+static void parse_xxch_frame(GetBitContext *gb, int *mask)
+{
+    int xxch_mask_nbits, nchannels, header_size;
+
+    // XXCH sync word
+    if (get_bits_long(gb, 32) != DCA_SYNCWORD_XXCH)
+        return;
+
+    header_size = get_bits(gb, 6) + 1;
+    if (header_size <= 6)
+        return;
+
+    // CRC presence flag for channel set header
+    skip_bits1(gb);
+
+    // Number of bits for loudspeaker mask
+    xxch_mask_nbits = get_bits(gb, 5) + 1;
+    if (xxch_mask_nbits <= DCA_SPEAKER_Cs)
+        return;
+
+    // XXCH frame header length
+    skip_bits_long(gb, header_size * 8 - (32 + 6 + 1 + 5));
+
+    // Channel set header length
+    skip_bits(gb, 7);
+
+    // Number of channels in a channel set
+    nchannels = get_bits(gb, 3) + 1;
+    if (nchannels > DCA_XXCH_CHANNELS_MAX)
+        return;
+
+    // Loudspeaker layout mask
+    *mask |= get_bits_long(gb, xxch_mask_nbits - DCA_SPEAKER_Cs) << DCA_SPEAKER_Cs;
+}
+
+static int dca_parse_params(DCAParseContext *pc1, AVCodecContext *avctx, const uint8_t *buf,
                             int buf_size, int *duration, int *sample_rate,
                             int *profile)
 {
@@ -199,6 +274,12 @@ static int dca_parse_params(DCAParseContext *pc1, const uint8_t *buf,
     DCACoreFrameHeader h;
     uint8_t hdr[DCA_CORE_FRAME_HEADER_SIZE + AV_INPUT_BUFFER_PADDING_SIZE] = { 0 };
     int ret, frame_size;
+
+    //PLEX
+    int ch_mask = 0;
+    const uint8_t *input = buf;
+    int input_size = buf_size;
+    //PLEX
 
     if (buf_size < DCA_CORE_FRAME_HEADER_SIZE)
         return AVERROR_INVALIDDATA;
@@ -229,7 +310,7 @@ static int dca_parse_params(DCAParseContext *pc1, const uint8_t *buf,
             *sample_rate = ff_dca_sampling_freqs[pc1->sr_code];
             *duration = 1024 << ff_dca_freq_ranges[pc1->sr_code];
             *profile = FF_PROFILE_DTS_EXPRESS;
-            return 0;
+            goto parse_full; //PLEX
         }
 
         if (asset->extension_mask & DCA_EXSS_XLL) {
@@ -254,7 +335,7 @@ static int dca_parse_params(DCAParseContext *pc1, const uint8_t *buf,
             *sample_rate = asset->max_sample_rate;
             *duration = (1 + (*sample_rate > 96000)) << nsamples_log2;
             *profile = FF_PROFILE_DTS_HD_MA;
-            return 0;
+            goto parse_full; //PLEX
         }
 
         return AVERROR_INVALIDDATA;
@@ -268,8 +349,10 @@ static int dca_parse_params(DCAParseContext *pc1, const uint8_t *buf,
 
     *duration = h.npcmblocks * DCA_PCMBLOCK_SAMPLES;
     *sample_rate = ff_dca_sample_rates[h.sr_code];
+#if 0 //PLEX
     if (*profile != FF_PROFILE_UNKNOWN)
         return 0;
+#endif //PLEX
 
     *profile = FF_PROFILE_DTS;
     if (h.ext_audio_present) {
@@ -284,21 +367,200 @@ static int dca_parse_params(DCAParseContext *pc1, const uint8_t *buf,
         }
     }
 
+    //PLEX
+    // Transmission bit rate
+    avctx->bit_rate = ff_dca_bit_rates[h.br_code];
+
+    avctx->bits_per_raw_sample = ff_dca_bits_per_sample[h.pcmr_code];
+
+    ch_mask = ff_dca_audio_mode_ch_mask[h.audio_mode];
+    // Low frequency effects flag
+    if (h.lfe_present)
+        ch_mask |= DCA_SPEAKER_MASK_LFE1;
+    //PLEX
+
     frame_size = FFALIGN(h.frame_size, 4);
     if (buf_size - 4 < frame_size)
-        return 0;
+        goto parse_full;
 
     buf      += frame_size;
     buf_size -= frame_size;
     if (AV_RB32(buf) != DCA_SYNCWORD_SUBSTREAM)
-        return 0;
+        goto parse_full;
     if (ff_dca_exss_parse(&pc1->exss, buf, buf_size) < 0)
-        return 0;
+        goto parse_full;
 
     if (asset->extension_mask & DCA_EXSS_XLL)
         *profile = FF_PROFILE_DTS_HD_MA;
     else if (asset->extension_mask & (DCA_EXSS_XBR | DCA_EXSS_XXCH | DCA_EXSS_X96))
         *profile = FF_PROFILE_DTS_HD_HRA;
+
+    //PLEX
+parse_full:
+    if ((!avctx->channel_layout || !avctx->channels || !avctx->sample_rate)) {
+        const AVCRC *crctab = av_crc_get_table(AV_CRC_16_CCITT);
+        int xch_pos = 0, x96_pos = 0, xxch_pos = 0, i;
+        uint32_t mrk = AV_RB32(input);
+        uint8_t *bebuf = NULL;
+        DCAExssAsset *asset = &pc1->exss.assets[0];
+        if (mrk != DCA_SYNCWORD_CORE_BE && mrk != DCA_SYNCWORD_SUBSTREAM) {
+            if (!(bebuf = av_malloc(input_size)))
+                goto fail;
+            if ((ret = avpriv_dca_convert_bitstream(input, input_size, bebuf, input_size)) < 0)
+                goto fail;
+            input = bebuf;
+        }
+
+        if ((ret = init_get_bits8(&gb, input, input_size)) < 0)
+            goto fail;
+
+        if (AV_RB32(input) == DCA_SYNCWORD_CORE_BE) {
+            if (h.ext_audio_present) {
+                int sync_pos = FFMIN(frame_size / 4, gb.size_in_bits / 32) - 1;
+                int last_pos = get_bits_count(&gb) / 32;
+                int size, dist;
+                switch (h.ext_audio_type) {
+                case EXT_AUDIO_XCH:
+                    if (avctx->request_channel_layout)
+                        break;
+
+                    // The distance between XCH sync word and end of the core frame
+                    // must be equal to XCH frame size. Off by one error is allowed for
+                    // compatibility with legacy bitstreams. Minimum XCH frame size is
+                    // 96 bytes. AMODE and PCHS are further checked to reduce
+                    // probability of alias sync detection.
+                    for (; sync_pos >= last_pos; sync_pos--) {
+                        if (AV_RB32(gb.buffer + sync_pos * 4) == DCA_SYNCWORD_XCH) {
+                            gb.index = (sync_pos + 1) * 32;
+                            size = get_bits(&gb, 10) + 1;
+                            dist = frame_size - sync_pos * 4;
+                            if (size >= 96
+                                && (size == dist || size - 1 == dist)
+                                && get_bits(&gb, 7) == 0x08) {
+                                xch_pos = get_bits_count(&gb);
+                                break;
+                            }
+                        }
+                    }
+                    break;
+
+                case EXT_AUDIO_X96:
+                    // The distance between X96 sync word and end of the core frame
+                    // must be equal to X96 frame size. Minimum X96 frame size is 96
+                    // bytes.
+                    for (; sync_pos >= last_pos; sync_pos--) {
+                        if (AV_RB32(gb.buffer + sync_pos * 4) == DCA_SYNCWORD_X96) {
+                            gb.index = (sync_pos + 1) * 32;
+                            size = get_bits(&gb, 12) + 1;
+                            dist = frame_size - sync_pos * 4;
+                            if (size >= 96 && size == dist) {
+                                x96_pos = get_bits_count(&gb);
+                                break;
+                            }
+                        }
+                    }
+                    break;
+
+                case EXT_AUDIO_XXCH:
+                    if (avctx->request_channel_layout)
+                        break;
+
+                    // XXCH frame header CRC must be valid. Minimum XXCH frame header
+                    // size is 11 bytes.
+                    for (; sync_pos >= last_pos; sync_pos--) {
+                        if (AV_RB32(gb.buffer + sync_pos * 4) == DCA_SYNCWORD_XXCH) {
+                            gb.index = (sync_pos + 1) * 32;
+                            size = get_bits(&gb, 6) + 1;
+                            dist = gb.size_in_bits / 8 - sync_pos * 4;
+                            if (size >= 11 && size <= dist &&
+                                !av_crc(crctab, 0xffff, gb.buffer +
+                                        (sync_pos + 1) * 4, size - 4)) {
+                                xxch_pos = sync_pos * 32;
+                                break;
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+            if (input_size - 4 > frame_size) {
+                input      += frame_size;
+                input_size -= frame_size;
+            }
+        }
+        if (AV_RB32(input) == DCA_SYNCWORD_SUBSTREAM) {
+            if ((ret = ff_dca_exss_parse(&pc1->exss, (uint8_t*)input, input_size)) < 0)
+                goto fail;
+        }
+
+        if (asset && asset->extension_mask & DCA_EXSS_XLL) {
+            DCAXllChSet *c;
+            DCAXllDecoder xll = {0};
+            if ((ret = ff_dca_xll_parse(&xll, (uint8_t*)input, asset)) < 0)
+                goto fail;
+            avctx->profile = FF_PROFILE_DTS_HD_MA;
+            *sample_rate = xll.chset[0].freq << (xll.nfreqbands - 1);
+            *duration = xll.nframesamples << (xll.nfreqbands - 1);
+            avctx->bits_per_raw_sample = xll.chset[0].storage_bit_res;
+            avctx->bit_rate = 0;
+            ch_mask = 0;
+            for (i = 0, c = xll.chset; i < xll.nactivechsets; i++, c++)
+                ch_mask |= c->ch_mask;
+        } else if (asset && (asset->extension_mask & DCA_EXSS_LBR)) {
+            // TODO: DTS-EXPRESS
+/*            DCAXllDecoder xll;
+            if ((ret = ff_dca_lbr_parse(&lbr, input, asset)) < 0)
+                goto fail;*/
+            avctx->profile = FF_PROFILE_DTS_EXPRESS;
+        } else if (asset && asset->extension_mask) {
+            avctx->profile = FF_PROFILE_DTS_HD_HRA;
+            if (asset->extension_mask & DCA_EXSS_X96 || x96_pos) {
+                *sample_rate <<= 1;
+                *duration <<= 1;
+            }
+            if (xch_pos)
+                ch_mask |= DCA_SPEAKER_MASK_Cs;
+            if (asset->extension_mask & DCA_EXSS_XXCH) {
+                if ((ret = init_get_bits8(&gb, input + asset->xxch_offset, asset->xxch_size)) < 0)
+                    return ret;
+                parse_xxch_frame(&gb, &ch_mask);
+            }
+        } else if (xch_pos || xxch_pos) {
+            if (xch_pos)
+                ch_mask |= DCA_SPEAKER_MASK_Cs;
+            if (xxch_pos) {
+                if ((ret = init_get_bits8(&gb, bebuf, buf_size)) < 0)
+                    goto fail;
+                gb.index = xxch_pos;
+                parse_xxch_frame(&gb, &ch_mask);
+            }
+            avctx->profile = FF_PROFILE_DTS_ES;
+            if (x96_pos) {
+                *sample_rate <<= 1;
+                *duration <<= 1;
+            }
+        } else if (x96_pos) {
+            avctx->profile = FF_PROFILE_DTS_96_24;
+            *sample_rate <<= 1;
+            *duration <<= 1;
+        } else {
+            avctx->profile = FF_PROFILE_DTS;
+        }
+
+fail:
+        av_freep(&bebuf);
+/*        if (ret < 0)
+            return ret; */
+    }
+
+    if (!avctx->channel_layout) {
+        avctx->channel_layout = get_channel_layout(ch_mask);
+        avctx->channels = av_get_channel_layout_nb_channels(avctx->channel_layout);
+    }
+
+    if (avctx->sample_fmt == AV_SAMPLE_FMT_NONE)
+        avctx->sample_fmt = (avctx->bits_per_raw_sample > 16) ?  AV_SAMPLE_FMT_S32P : AV_SAMPLE_FMT_S16P;
+    //PLEX
 
     return 0;
 }
@@ -331,7 +593,7 @@ static int dca_parse(AVCodecParserContext *s, AVCodecContext *avctx,
     }
 
     /* read the duration and sample rate from the frame header */
-    if (!dca_parse_params(pc1, buf, buf_size, &duration, &sample_rate, &avctx->profile)) {
+    if (!dca_parse_params(pc1, avctx, buf, buf_size, &duration, &sample_rate, &avctx->profile)) {
         if (!avctx->sample_rate)
             avctx->sample_rate = sample_rate;
         s->duration = av_rescale(duration, avctx->sample_rate, sample_rate);

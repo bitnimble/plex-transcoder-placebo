@@ -142,6 +142,7 @@ void ff_dca_downmix_to_stereo_float(AVFloatDSPContext *fdsp, float **samples,
     }
 }
 
+#if CONFIG_DCA_DECODER
 static int dcadec_decode_frame(AVCodecContext *avctx, void *data,
                                int *got_frame_ptr, AVPacket *avpkt)
 {
@@ -149,7 +150,7 @@ static int dcadec_decode_frame(AVCodecContext *avctx, void *data,
     AVFrame *frame = data;
     uint8_t *input = avpkt->data;
     int input_size = avpkt->size;
-    int i, ret, prev_packet = s->packet;
+    int i, ret;//PLEX, prev_packet = s->packet;
     uint32_t mrk;
 
     if (input_size < MIN_PACKET_SIZE || input_size > MAX_PACKET_SIZE) {
@@ -195,6 +196,7 @@ static int dcadec_decode_frame(AVCodecContext *avctx, void *data,
         }
     }
 
+#if 0 //PLEX
     if (!s->core_only) {
         DCAExssAsset *asset = NULL;
 
@@ -277,6 +279,9 @@ static int dcadec_decode_frame(AVCodecContext *avctx, void *data,
             if ((ret = ff_dca_core_filter_frame(&s->core, frame)) < 0)
                 return ret;
         }
+#else //PLEX
+    if (0) {
+#endif //PLEX
     } else if (s->packet & DCA_PACKET_CORE) {
         if ((ret = ff_dca_core_filter_frame(&s->core, frame)) < 0)
             return ret;
@@ -299,8 +304,10 @@ static av_cold void dcadec_flush(AVCodecContext *avctx)
     DCAContext *s = avctx->priv_data;
 
     ff_dca_core_flush(&s->core);
+#if 0 //PLEX
     ff_dca_xll_flush(&s->xll);
     ff_dca_lbr_flush(&s->lbr);
+#endif //PLEX
 
     s->packet &= DCA_PACKET_MASK;
 }
@@ -310,8 +317,10 @@ static av_cold int dcadec_close(AVCodecContext *avctx)
     DCAContext *s = avctx->priv_data;
 
     ff_dca_core_close(&s->core);
+#if 0 //PLEX
     ff_dca_xll_close(&s->xll);
     ff_dca_lbr_close(&s->lbr);
+#endif
 
     av_freep(&s->buffer);
     s->buffer_size = 0;
@@ -339,8 +348,10 @@ static av_cold int dcadec_init(AVCodecContext *avctx)
     if (ff_dca_core_init(&s->core) < 0)
         return AVERROR(ENOMEM);
 
+#if 0 //PLEX
     if (ff_dca_lbr_init(&s->lbr) < 0)
         return AVERROR(ENOMEM);
+#endif //PLEX
 
     ff_dcadsp_init(&s->dcadsp);
     s->core.dcadsp = &s->dcadsp;
@@ -399,10 +410,11 @@ const AVCodec ff_dca_decoder = {
     .decode         = dcadec_decode_frame,
     .close          = dcadec_close,
     .flush          = dcadec_flush,
-    .capabilities   = AV_CODEC_CAP_DR1 | AV_CODEC_CAP_CHANNEL_CONF,
+    .capabilities   = AV_CODEC_CAP_DR1, // PLEX: removed AV_CODEC_CAP_CHANNEL_CONF
     .sample_fmts    = (const enum AVSampleFormat[]) { AV_SAMPLE_FMT_S16P, AV_SAMPLE_FMT_S32P,
                                                       AV_SAMPLE_FMT_FLTP, AV_SAMPLE_FMT_NONE },
     .priv_class     = &dcadec_class,
     .profiles       = NULL_IF_CONFIG_SMALL(ff_dca_profiles),
     .caps_internal  = FF_CODEC_CAP_INIT_THREADSAFE | FF_CODEC_CAP_INIT_CLEANUP,
 };
+#endif

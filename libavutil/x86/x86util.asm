@@ -799,10 +799,10 @@
     pminsw %1, %3
 %endmacro
 
-%macro PMINSD 3 ; dst, src, tmp/unused
+%macro PMINSD 3-4 ; dst, src, tmp/unused, rounding-allowed
 %if cpuflag(sse4)
     pminsd    %1, %2
-%elif cpuflag(sse2)
+%elif cpuflag(sse2) && (%0 > 3)
     cvtdq2ps  %1, %1
     minps     %1, %2
     cvtps2dq  %1, %1

@@ -1575,6 +1575,16 @@ static void print_interlace_msg(AVCodecContext *avctx, QSVEncContext *q)
     }
 }
 
+// Reset a control struct, preserving its allocated params and payload arrays
+static void reset_encoder_control(mfxEncodeCtrl* enc_ctrl)
+{
+    enc_ctrl->SkipFrame = MFX_SKIPFRAME_NO_SKIP;
+    enc_ctrl->QP = 0;
+    enc_ctrl->FrameType = MFX_FRAMETYPE_UNKNOWN;
+    enc_ctrl->NumExtParam = 0;
+    enc_ctrl->NumPayload = 0;
+}
+
 static int encode_frame(AVCodecContext *avctx, QSVEncContext *q,
                         const AVFrame *frame)
 {
@@ -1601,6 +1611,8 @@ static int encode_frame(AVCodecContext *avctx, QSVEncContext *q,
     if (qsv_frame) {
         surf = &qsv_frame->surface;
         enc_ctrl = &qsv_frame->enc_ctrl;
+
+        reset_encoder_control(enc_ctrl);
 
         if (frame->pict_type == AV_PICTURE_TYPE_I) {
             enc_ctrl->FrameType = MFX_FRAMETYPE_I | MFX_FRAMETYPE_REF;

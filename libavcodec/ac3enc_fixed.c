@@ -31,7 +31,9 @@
 #include "internal.h"
 #include "audiodsp.h"
 #include "ac3enc.h"
+#if CONFIG_EAC3_ENCODER
 #include "eac3enc.h"
+#endif
 #include "kbdwin.h"
 
 static void sum_square_butterfly(AC3EncodeContext *s, int64_t sum[4],

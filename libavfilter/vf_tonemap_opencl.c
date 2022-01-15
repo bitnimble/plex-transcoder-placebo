@@ -195,6 +195,8 @@ static int tonemap_opencl_init(AVFilterContext *avctx)
 
     av_bprintf(&header, "#define chroma_loc %d\n", (int)ctx->chroma_loc);
 
+    av_bprintf(&header, "#define powr native_powr\n");
+
     if (rgb2rgb_passthrough)
         av_bprintf(&header, "#define RGB2RGB_PASSTHROUGH\n");
     else

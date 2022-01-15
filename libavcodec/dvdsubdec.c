@@ -575,6 +575,15 @@ static int dvdsub_decode(AVCodecContext *avctx,
         return appended ? 0 : append_to_cached_buf(avctx, buf, buf_size);
     }
 
+    // PLEX
+    // Some VOBSUB streams inside MKVs don't contain start/end times in the
+    // VOBSUB sense, instead relying on the PTS and duration from the MKV block.
+
+    if (sub->start_display_time >= sub->end_display_time && avpkt->duration > 0)
+        sub->end_display_time = sub->start_display_time + avpkt->duration;
+
+    // PLEX
+
     if (is_menu < 0) {
         ctx->buf_size = 0;
     no_subtitle:

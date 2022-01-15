@@ -30,6 +30,10 @@ struct MpvParseContext {
     AVRational frame_rate;
     int progressive_sequence;
     int width, height;
+    //PLEX
+    int ps_width, ps_height;
+    int aspect_ratio_info;
+    //PLEX
 };
 
 #if !FF_API_FLAG_TRUNCATED
@@ -135,6 +139,7 @@ static void mpegvideo_extract_headers(AVCodecParserContext *s,
             if (bytes_left >= 7) {
                 pc->width  = (buf[0] << 4) | (buf[1] >> 4);
                 pc->height = ((buf[1] & 0x0f) << 8) | buf[2];
+                pc->aspect_ratio_info = buf[3] >> 4;
                 if(!avctx->width || !avctx->height || !avctx->coded_width || !avctx->coded_height){
                     set_dim_ret = ff_set_dimensions(avctx, pc->width, pc->height);
                     did_set_size=1;
@@ -179,6 +184,17 @@ static void mpegvideo_extract_headers(AVCodecParserContext *s,
                         avctx->ticks_per_frame = 2;
                     }
                     break;
+                //PLEX
+                case 0x2: /* sequence display extension */
+                    {
+                        const uint8_t *seqbuf = buf + 1;
+                        if (buf[0] & 0x01)
+                            seqbuf += 3;
+                        pc->ps_width = ((seqbuf[0] << 6) | (seqbuf[1] >> 2)) * 16;
+                        pc->ps_height = (((seqbuf[1] & 0x01 << 13)) | (seqbuf[2] << 5) | (seqbuf[3] >> 3)) * 16;
+                    }
+                    break;
+                //PLEX
                 case 0x8: /* picture coding extension */
                     if (bytes_left >= 5) {
                         top_field_first = buf[3] & (1 << 7);
@@ -210,6 +226,12 @@ static void mpegvideo_extract_headers(AVCodecParserContext *s,
                 }
             }
             break;
+        case USER_START_CODE:
+            if (bytes_left >= 6 &&
+                AV_RL32(buf) == MKTAG('G','A','9','4') &&
+                buf[4] == 3 && (buf[5] & 0x40))
+                avctx->properties |= FF_CODEC_PROPERTY_CLOSED_CAPTIONS;
+            break;
         case -1:
             goto the_end;
         default:
@@ -240,6 +262,47 @@ static void mpegvideo_extract_headers(AVCodecParserContext *s,
         s->coded_width  = FFALIGN(pc->width,  16);
         s->coded_height = FFALIGN(pc->height, 16);
     }
+
+    //PLEX: copied from mpeg12dec.c
+    if (pc->aspect_ratio_info) {
+        if (avctx->codec_id == AV_CODEC_ID_MPEG1VIDEO) {
+            // MPEG-1 aspect
+            avctx->sample_aspect_ratio = av_d2q(1.0 / ff_mpeg1_aspect[pc->aspect_ratio_info], 255);
+        } else if (pc->aspect_ratio_info > 1) { // MPEG-2
+            // MPEG-2 aspect
+            AVRational dar =
+                av_mul_q(av_div_q(ff_mpeg2_aspect[pc->aspect_ratio_info],
+                                  (AVRational) { pc->ps_width,
+                                                 pc->ps_height }),
+                         (AVRational) { s->width, s->height });
+
+            /* We ignore the spec here and guess a bit as reality does not
+             * match the spec, see for example res_change_ffmpeg_aspect.ts
+             * and sequence-display-aspect.mpg.
+             * issue1613, 621, 562 */
+            if ((pc->ps_width == 0) || (pc->ps_height == 0) ||
+                (av_cmp_q(dar, (AVRational) { 4, 3 }) &&
+                 av_cmp_q(dar, (AVRational) { 16, 9 }))) {
+                avctx->sample_aspect_ratio =
+                    av_div_q(ff_mpeg2_aspect[pc->aspect_ratio_info],
+                             (AVRational) { s->width, s->height });
+            } else {
+                avctx->sample_aspect_ratio =
+                    av_div_q(ff_mpeg2_aspect[pc->aspect_ratio_info],
+                             (AVRational) { pc->ps_width, pc->ps_height });
+// issue1613 4/3 16/9 -> 16/9
+// res_change_ffmpeg_aspect.ts 4/3 225/44 ->4/3
+// widescreen-issue562.mpg 4/3 16/9 -> 16/9
+//                s->avctx->sample_aspect_ratio = av_mul_q(s->avctx->sample_aspect_ratio, (AVRational) {s->width, s->height});
+                ff_dlog(avctx, "aspect A %d/%d\n",
+                        ff_mpeg2_aspect[pc->aspect_ratio_info].num,
+                        ff_mpeg2_aspect[pc->aspect_ratio_info].den);
+                ff_dlog(avctx, "aspect B %d/%d\n", avctx->sample_aspect_ratio.num,
+                        avctx->sample_aspect_ratio.den);
+            }
+        } // MPEG-2
+    }
+    //PLEX
 
 #if FF_API_AVCTX_TIMEBASE
     if (avctx->framerate.num)

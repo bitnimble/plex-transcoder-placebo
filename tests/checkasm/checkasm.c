@@ -163,6 +163,9 @@ static const struct {
     #if CONFIG_BLEND_FILTER
         { "vf_blend", checkasm_check_blend },
     #endif
+    #if CONFIG_BWDIF_FILTER
+        { "vf_bwdif", checkasm_check_vf_bwdif },
+    #endif
     #if CONFIG_COLORSPACE_FILTER
         { "vf_colorspace", checkasm_check_colorspace },
     #endif
@@ -180,6 +183,9 @@ static const struct {
     #endif
     #if CONFIG_THRESHOLD_FILTER
         { "vf_threshold", checkasm_check_vf_threshold },
+    #endif
+    #if CONFIG_YADIF_FILTER
+        { "vf_yadif", checkasm_check_vf_yadif },
     #endif
 #endif
 #if CONFIG_SWSCALE

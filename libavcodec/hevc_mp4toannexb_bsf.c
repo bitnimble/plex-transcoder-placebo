@@ -56,6 +56,11 @@ static int hevc_extradata_to_annexb(AVBSFContext *ctx)
         int type = bytestream2_get_byte(&gb) & 0x3f;
         int cnt  = bytestream2_get_be16(&gb);
 
+        if (bytestream2_get_bytes_left(&gb) == 0) {
+            av_log(ctx, AV_LOG_WARNING, "Extradata contained fewer arrays than indicated\n");
+            break;
+        }
+
         if (!(type == HEVC_NAL_VPS || type == HEVC_NAL_SPS || type == HEVC_NAL_PPS ||
               type == HEVC_NAL_SEI_PREFIX || type == HEVC_NAL_SEI_SUFFIX)) {
             av_log(ctx, AV_LOG_ERROR, "Invalid NAL unit type in extradata: %d\n",
@@ -66,6 +71,10 @@ static int hevc_extradata_to_annexb(AVBSFContext *ctx)
 
         for (j = 0; j < cnt; j++) {
             int nalu_len = bytestream2_get_be16(&gb);
+            if (nalu_len < 1 || bytestream2_get_bytes_left(&gb) < nalu_len) {
+                av_log(ctx, AV_LOG_WARNING, "Extradata NAL ended prematurely\n");
+                goto done;
+            }
 
             if (4 + AV_INPUT_BUFFER_PADDING_SIZE + nalu_len > SIZE_MAX - new_extradata_size) {
                 ret = AVERROR_INVALIDDATA;
@@ -82,6 +91,7 @@ static int hevc_extradata_to_annexb(AVBSFContext *ctx)
         }
     }
 
+done:
     av_freep(&ctx->par_out->extradata);
     ctx->par_out->extradata      = new_extradata;
     ctx->par_out->extradata_size = new_extradata_size;

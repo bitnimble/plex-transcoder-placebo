@@ -600,12 +600,7 @@ static const AVOption options[] = {
     { NULL }
 };
 
-static const AVClass tls_class = {
-    .class_name = "tls",
-    .item_name  = av_default_item_name,
-    .option     = options,
-    .version    = LIBAVUTIL_VERSION_INT,
-};
+TLS_CLASS(TLSContext, tls_shared)
 
 const URLProtocol ff_tls_protocol = {
     .name           = "tls",

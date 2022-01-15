@@ -310,6 +310,7 @@ XML_DEFAULT_HANDLING:
         break;
 
     /* case AV_ESCAPE_MODE_BACKSLASH or unknown mode */
+    case AV_ESCAPE_MODE_BACKSLASH:
     default:
         /* \-escape characters */
         for (; *src; src++) {
@@ -325,6 +326,17 @@ XML_DEFAULT_HANDLING:
                  (is_special || (is_ws && is_first_last))))
                 av_bprint_chars(dstbuf, '\\', 1);
             av_bprint_chars(dstbuf, *src, 1);
+        }
+        break;
+
+    case AV_ESCAPE_MODE_URL:
+        for (; *src; src++) {
+            int is_strictly_special = special_chars && strchr(special_chars, *src);
+            if (is_strictly_special ||
+                (!(flags & AV_ESCAPE_FLAG_STRICT) && !strchr("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~", *src)))
+                av_bprintf(dstbuf, "%%%02X", *src);
+            else
+                av_bprint_chars(dstbuf, *src, 1);
         }
         break;
     }

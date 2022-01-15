@@ -84,6 +84,20 @@ int ff_unlock_avformat(void)
     return ff_mutex_unlock(&avformat_mutex) ? -1 : 0;
 }
 
+//PLEX
+static AVDecryptionCallbacks decryption_callbacks = {NULL};
+AVDecryptionCallbacks *decryption_callbacks_ptr = &decryption_callbacks;
+void avformat_set_decryption_callbacks(const AVDecryptionCallbacks* cbs)
+{
+    ff_lock_avformat();
+    if (cbs)
+        decryption_callbacks = *cbs;
+    else
+        decryption_callbacks = (AVDecryptionCallbacks){NULL};
+    ff_unlock_avformat();
+}
+//PLEX
+
 int64_t av_stream_get_end_pts(const AVStream *st)
 {
     if (cffstream(st)->priv_pts) {
@@ -135,6 +149,7 @@ int ff_copy_whiteblacklists(AVFormatContext *dst, const AVFormatContext *src)
 const AVCodec *ff_find_decoder(AVFormatContext *s, const AVStream *st,
                                enum AVCodecID codec_id)
 {
+    AVCodec *codec;
     switch (st->codecpar->codec_type) {
     case AVMEDIA_TYPE_VIDEO:
         if (s->video_codec)    return s->video_codec;
@@ -146,6 +161,9 @@ const AVCodec *ff_find_decoder(AVFormatContext *s, const AVStream *st,
         if (s->subtitle_codec) return s->subtitle_codec;
         break;
     }
+
+    if ((codec = avcodec_find_decoder_by_name(avcodec_get_name(codec_id))))
+        return codec;
 
     return avcodec_find_decoder(codec_id);
 }
@@ -274,6 +292,18 @@ int ff_add_attached_pic(AVFormatContext *s, AVStream *st0, AVIOContext *pb,
 
     pkt->stream_index = st->index;
     pkt->flags       |= AV_PKT_FLAG_KEY;
+
+//PLEX
+    FFStream *sti = ffstream(st);
+    if (!sti->decrypt_inited) {
+        ff_lock_avformat();
+        int (*new_stream)(AVFormatContext *ctx, AVStream *s) = decryption_callbacks.new_stream;
+        ff_unlock_avformat();
+        if (new_stream)
+            new_stream(s, st);
+        sti->decrypt_inited = 1;
+    }
+//PLEX
 
     return 0;
 fail:
@@ -681,6 +711,14 @@ void ff_free_stream(AVFormatContext *s, AVStream *st)
 {
     av_assert0(s->nb_streams>0);
     av_assert0(s->streams[ s->nb_streams - 1 ] == st);
+
+//PLEX
+    ff_lock_avformat();
+    int (*close_stream)(AVFormatContext *ctx, AVStream *s) = decryption_callbacks.close_stream;
+    ff_unlock_avformat();
+    if (close_stream)
+        close_stream(s, st);
+//PLEX
 
     free_stream(&s->streams[ --s->nb_streams ]);
 }
@@ -1731,6 +1769,20 @@ uint8_t *av_stream_get_side_data(const AVStream *st,
     if (size)
         *size = 0;
     return NULL;
+}
+
+int ff_stream_copy_side_data(AVStream *dst, const AVStream *src)
+{
+    int i;
+
+    for (i = 0; i < src->nb_side_data; i++) {
+        uint8_t *new = av_stream_new_side_data(dst, src->side_data[i].type, src->side_data[i].size);
+        if (!new)
+            return AVERROR(ENOMEM);
+        memcpy(new, src->side_data[i].data, src->side_data[i].size);
+    }
+
+    return 0;
 }
 
 int av_stream_add_side_data(AVStream *st, enum AVPacketSideDataType type,

@@ -422,6 +422,7 @@ int ff_h264_decode_seq_parameter_set(GetBitContext *gb, AVCodecContext *avctx,
         if (ret < 0)
             goto fail;
         sps->scaling_matrix_present |= ret;
+        avctx->scaling_matrix_present |= sps->scaling_matrix_present; //PLEX
     } else {
         sps->chroma_format_idc = 1;
         sps->bit_depth_luma    = 8;

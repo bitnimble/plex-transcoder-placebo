@@ -36,6 +36,24 @@ int ff_aac_ac3_parse(AVCodecParserContext *s1,
     int new_frame_start;
     int got_frame = 0;
 
+    if ((s1->flags & PARSER_FLAG_SKIP && s->parse_full) || avctx->extradata_size) {
+        s->remaining_size = 0;
+        s1->flags |= PARSER_FLAG_COMPLETE_FRAMES;
+        s1->duration = -1;
+        if (s1->flags & PARSER_FLAG_ONCE || (!avctx->codec &&
+                ((avctx->codec_id == AV_CODEC_ID_AAC) ?
+                 avctx->profile == FF_PROFILE_UNKNOWN :
+                 avctx->channel_layout == 0))) {
+            got_frame = 1;
+            i = buf_size;
+            goto skip_sync;
+        } else {
+            *poutbuf = buf;
+            *poutbuf_size = buf_size;
+            return buf_size;
+        }
+    }
+
 get_next:
     i=END_NOT_FOUND;
     if(s->remaining_size <= buf_size){
@@ -74,6 +92,7 @@ get_next:
         return buf_size;
     }
 
+skip_sync:
     *poutbuf = buf;
     *poutbuf_size = buf_size;
 
@@ -81,12 +100,12 @@ get_next:
     if(s->codec_id)
         avctx->codec_id = s->codec_id;
 
+    if (s->parse_full && (s1->flags & PARSER_FLAG_ONCE || (!avctx->codec && avctx->profile == FF_PROFILE_UNKNOWN))) {
+        if (!s->parse_full(s1, avctx, buf, buf_size))
+            s1->flags &= ~PARSER_FLAG_ONCE;
+    }
+
     if (got_frame) {
-        /* Due to backwards compatible HE-AAC the sample rate, channel count,
-           and total number of samples found in an AAC ADTS header are not
-           reliable. Bit rate is still accurate because the total frame
-           duration in seconds is still correct (as is the number of bits in
-           the frame). */
         if (avctx->codec_id != AV_CODEC_ID_AAC) {
             avctx->sample_rate = s->sample_rate;
             if (!CONFIG_EAC3_DECODER || avctx->codec_id != AV_CODEC_ID_EAC3) {
@@ -95,11 +114,13 @@ get_next:
             }
             s1->duration = s->samples;
             avctx->audio_service_type = s->service_type;
+
+            avctx->sample_fmt = AV_SAMPLE_FMT_S16P;
         }
 
         /* Calculate the average bit rate */
         s->frame_number++;
-        if (!CONFIG_EAC3_DECODER || avctx->codec_id != AV_CODEC_ID_EAC3) {
+        if (!CONFIG_EAC3_DECODER || (avctx->codec_id != AV_CODEC_ID_EAC3 && !(s1->flags & PARSER_FLAG_SKIP))) {
             avctx->bit_rate +=
                 (s->bit_rate - avctx->bit_rate) / s->frame_number;
         }

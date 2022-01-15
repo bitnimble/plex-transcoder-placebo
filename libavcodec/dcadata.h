@@ -34,6 +34,8 @@ extern const uint8_t ff_dca_channels[16];
 
 extern const uint8_t ff_dca_dmix_primary_nch[8];
 
+extern const uint8_t ff_dca_audio_mode_ch_mask[];
+
 extern const uint8_t ff_dca_quant_index_sel_nbits[DCA_CODE_BOOKS];
 extern const uint8_t ff_dca_quant_index_group_size[DCA_CODE_BOOKS];
 

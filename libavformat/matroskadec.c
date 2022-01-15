@@ -418,6 +418,9 @@ typedef struct MatroskaDemuxContext {
 
     /* Bandwidth value for WebM DASH Manifest */
     int bandwidth;
+
+    /* Skip parsing tags in trailers */
+    int skip_trailer_tags;
 } MatroskaDemuxContext;
 
 #define CHILD_OF(parent) { .def = { .n = parent } }
@@ -1951,6 +1954,10 @@ static void matroska_execute_seekhead(MatroskaDemuxContext *matroska)
         if (id == MATROSKA_ID_CUES)
             continue;
 
+        // don't seek for metadata if we don't care
+        if (id == MATROSKA_ID_TAGS && matroska->skip_trailer_tags)
+            continue;
+
         if (matroska_parse_seekhead_entry(matroska, pos) < 0) {
             // mark index as broken
             matroska->cues_parsing_deferred = -1;
@@ -2548,6 +2555,14 @@ static int matroska_parse_tracks(AVFormatContext *s)
             av_dict_set(&st->metadata, "enc_key_id", key_id_base64,
                         AV_DICT_DONT_STRDUP_VAL);
         }
+
+        //PLEX
+        if (encodings_list->nb_elem == 1 && !(s->flags & AVFMT_FLAG_BITEXACT)) {
+            av_dict_set_int(&st->metadata, "encoding_type", encodings[0].type, 0);
+            if (encodings[0].type == 0)
+              av_dict_set_int(&st->metadata, "compression_algo", encodings[0].compression.algo, 0);
+        }
+        //PLEX
 
         if (!strcmp(track->codec_id, "V_MS/VFW/FOURCC") &&
              track->codec_priv.size >= 40               &&
@@ -3888,13 +3903,20 @@ static int matroska_read_seek(AVFormatContext *s, int stream_index,
     timestamp = FFMAX(timestamp, sti->index_entries[0].timestamp);
 
     if ((index = av_index_search_timestamp(st, timestamp, flags)) < 0 ||
-         index == sti->nb_index_entries - 1) {
+          index == sti->nb_index_entries - 1) {
         matroska_reset_status(matroska, 0, sti->index_entries[sti->nb_index_entries - 1].pos);
-        while ((index = av_index_search_timestamp(st, timestamp, flags)) < 0 ||
-               index == sti->nb_index_entries - 1) {
+        while ((index = av_index_search_timestamp(st, timestamp, flags)) < 0 || index == sti->nb_index_entries - 1) {
+            int ret;
+            int64_t pos = avio_tell(matroska->ctx->pb);
             matroska_clear_queue(matroska);
-            if (matroska_parse_cluster(matroska) < 0)
-                break;
+            if ((ret = matroska_parse_cluster(matroska)) < 0) {
+                if (ret == AVERROR_EOF) {
+                    break;
+                } else if(matroska_resync(matroska, pos) < 0) {
+                    index = -1;
+                    break;
+                }
+            }
         }
     }
 
@@ -3925,6 +3947,7 @@ static int matroska_read_seek(AVFormatContext *s, int stream_index,
     avpriv_update_cur_dts(s, st, sti->index_entries[index].timestamp);
     return 0;
 err:
+    av_log(s, sti->nb_index_entries ? AV_LOG_WARNING : AV_LOG_VERBOSE, "Failed to seek using index; falling back to generic seek\n");
     // slightly hackish but allows proper fallback to
     // the generic seeking code.
     matroska_reset_status(matroska, 0, -1);
@@ -4357,17 +4380,33 @@ static int webm_dash_manifest_read_packet(AVFormatContext *s, AVPacket *pkt)
     return AVERROR_EOF;
 }
 
+#define COMMON_OPTS \
+    { "skip_trailer_tags", "skip parsing metadata at the end of the file.", OFFSET(skip_trailer_tags), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, AV_OPT_FLAG_DECODING_PARAM }, \
+
 #define OFFSET(x) offsetof(MatroskaDemuxContext, x)
-static const AVOption options[] = {
+static const AVOption matroskadec_options[] = {
+    COMMON_OPTS
+    { NULL },
+};
+
+static const AVOption webm_dash_options[] = {
     { "live", "flag indicating that the input is a live file that only has the headers.", OFFSET(is_live), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, AV_OPT_FLAG_DECODING_PARAM },
     { "bandwidth", "bandwidth of this stream to be specified in the DASH manifest.", OFFSET(bandwidth), AV_OPT_TYPE_INT, {.i64 = 0}, 0, INT_MAX, AV_OPT_FLAG_DECODING_PARAM },
+    COMMON_OPTS
     { NULL },
+};
+
+static const AVClass matroskadec_class = {
+    .class_name = "Matroska demuxer",
+    .item_name  = av_default_item_name,
+    .option     = matroskadec_options,
+    .version    = LIBAVUTIL_VERSION_INT,
 };
 
 static const AVClass webm_dash_class = {
     .class_name = "WebM DASH Manifest demuxer",
     .item_name  = av_default_item_name,
-    .option     = options,
+    .option     = webm_dash_options,
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
@@ -4394,5 +4433,6 @@ const AVInputFormat ff_matroska_demuxer = {
     .read_packet    = matroska_read_packet,
     .read_close     = matroska_read_close,
     .read_seek      = matroska_read_seek,
+    .priv_class     = &matroskadec_class,
     .mime_type      = "audio/webm,audio/x-matroska,video/webm,video/x-matroska"
 };

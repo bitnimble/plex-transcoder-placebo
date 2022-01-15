@@ -161,7 +161,7 @@ static av_cold int get_channel_label(int channel)
     else if (map <= AV_CH_BACK_RIGHT)
         return channel + 29;
     else if (map <= AV_CH_BACK_CENTER)
-        return channel - 1;
+        return channel + 1;
     else if (map <= AV_CH_SIDE_RIGHT)
         return channel - 4;
     else if (map <= AV_CH_TOP_BACK_RIGHT)

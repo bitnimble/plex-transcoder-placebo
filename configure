@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 #
 # FFmpeg configure script
 #
@@ -206,6 +206,7 @@ External library support:
   --disable-bzlib          disable bzlib [autodetect]
   --disable-coreimage      disable Apple CoreImage framework [autodetect]
   --enable-chromaprint     enable audio fingerprinting with chromaprint [no]
+  --disable-eae            disable EAE [yes]
   --enable-frei0r          enable frei0r video filtering [no]
   --enable-gcrypt          enable gcrypt, needed for rtmp(t)e support
                            if openssl, librtmp or gmp is not used [no]
@@ -308,6 +309,7 @@ External library support:
   --enable-mbedtls         enable mbedTLS, needed for https support
                            if openssl, gnutls or libtls is not used [no]
   --enable-mediacodec      enable Android MediaCodec support [no]
+  --enable-mediacodecndk   enable native Android MediaCodec support [no]
   --enable-mediafoundation enable encoding via MediaFoundation [auto]
   --disable-metal          disable Apple Metal framework [autodetect]
   --enable-libmysofa       enable libmysofa, needed for sofalizer filter [no]
@@ -681,6 +683,10 @@ enable(){
     set_all yes $*
 }
 
+external(){
+    set_all external $*
+}
+
 disable(){
     set_all no $*
 }
@@ -738,6 +744,57 @@ enable_deep_weak(){
     done
 }
 
+do_enable_dep(){
+    enable_fn=$1
+    shift 1
+    enable_type=yes
+    [ "$check_phase" = external ] && enable_type=external
+    for var in $*; do
+        if ! enabled $var ; then
+            $enable_fn $enable_type $var
+        fi
+    done
+}
+
+enable_dep(){
+    do_enable_dep set_all $*
+}
+
+enable_dep_weak(){
+    do_enable_dep set_weak $*
+}
+
+do_enable_dep_deep(){
+    for var; do
+        enabled $var && continue
+        eval sel="\$${var}_select"
+        eval sgs="\$${var}_suggest"
+        pushvar var sgs
+        enable_dep_deep $sel
+        popvar sgs
+        enable_dep_deep_weak $sgs
+        popvar var
+        for dep in $sel $sgs; do
+            eval "${dep}_dependents=\"\${${dep}_dependents} $var\""
+        done
+    done
+}
+
+enable_dep_deep(){
+    do_enable_dep_deep $*
+    enable_dep $*
+}
+
+enable_dep_deep_weak(){
+    for var; do
+        disabled $var && continue
+        pushvar var
+        do_enable_dep_deep $var
+        popvar var
+        enable_dep_weak $var
+    done
+}
+
 requested(){
     test "${1#!}" = "$1" && op="=" || op="!="
     eval test "x\$${1#!}_requested" $op "xyes"
@@ -745,7 +802,18 @@ requested(){
 
 enabled(){
     test "${1#!}" = "$1" && op="=" || op="!="
+    test "${1#!}" = "$1" && op2="||" || op2="&&"
+    eval test "x\$${1#!}" $op "xyes" $op2 eval test "x\$${1#!}" $op "xexternal"
+}
+
+enabled_not_external(){
+    test "${1#!}" = "$1" && op="=" || op="!="
     eval test "x\$${1#!}" $op "xyes"
+}
+
+is_external(){
+    test "${1#!}" = "$1" && op="=" || op="!="
+    eval test "x\$${1#!}" $op "xexternal"
 }
 
 disabled(){
@@ -793,11 +861,26 @@ is_in(){
     return 1
 }
 
+# First enable normal deps. After this, in a second pass, enable externals.
+# Components not enabled yet in the externals pass are also marked as externals.
+#
+# If normal deps depend on externals, we'll get errors at link time. But we
+# don't want such cases anyway.
+#
+# Multiple externals can depend on the same external deps. Each external DSO
+# will have a copy of the components' code.
+
 # The cfg loop is very hot (several thousands iterations), and in bash also
 # potentialy quite slow. Try to abort the iterations early, preferably without
 # calling functions. 70%+ of the time cfg is already done or without deps.
-check_deps(){
+do_check_deps(){
     for cfg; do
+        if [ "$check_phase" = external ] ; then
+            is_external $cfg || continue
+        else
+            is_external $cfg && continue
+        fi
+
         eval [ x\$${cfg}_checking = xdone ] && continue
         eval [ x\$${cfg}_checking = xinprogress ] && die "Circular dependency for $cfg."
 
@@ -816,19 +899,20 @@ check_deps(){
             eval ${cfg}_checking=inprogress
 
             set -- $cfg "$dep_all" "$dep_any" "$dep_con" "$dep_sel" "$dep_sgs" "$dep_ifa" "$dep_ifn"
-            check_deps $dep_all $dep_any $dep_con $dep_sel $dep_sgs $dep_ifa $dep_ifn
+            do_check_deps $dep_all $dep_any $dep_con $dep_sel $dep_sgs $dep_ifa $dep_ifn #PLEX: added do_
             cfg=$1; dep_all=$2; dep_any=$3; dep_con=$4; dep_sel=$5 dep_sgs=$6; dep_ifa=$7; dep_ifn=$8
 
-            [ -n "$dep_ifa" ] && { enabled_all $dep_ifa && enable_weak $cfg; }
-            [ -n "$dep_ifn" ] && { enabled_any $dep_ifn && enable_weak $cfg; }
+            [ -n "$dep_ifa" ] && { enabled_all $dep_ifa && enable_dep_weak $cfg; } #PLEX: added _dep
+            [ -n "$dep_ifn" ] && { enabled_any $dep_ifn && enable_dep_weak $cfg; } #PLEX: added _dep
             enabled_all  $dep_all || { disable_with_reason $cfg "not all dependencies are satisfied: $dep_all"; }
             enabled_any  $dep_any || { disable_with_reason $cfg "not any dependency is satisfied: $dep_any"; }
             disabled_all $dep_con || { disable_with_reason $cfg "some conflicting dependencies are unsatisfied: $dep_con"; }
             disabled_any $dep_sel && { disable_with_reason $cfg "some selected dependency is unsatisfied: $dep_sel"; }
 
-            enabled $cfg && enable_deep_weak $dep_sel $dep_sgs
+            enabled $cfg && enable_dep_deep_weak $dep_sel $dep_sgs
 
             for dep in $dep_all $dep_any $dep_sel $dep_sgs; do
+                enabled $dep && eval append ${dep}_dependents $cfg #PLEX
                 # filter out library deps, these do not belong in extralibs
                 is_in $dep $LIBRARY_LIST && continue
                 enabled $dep && eval append ${cfg}_extralibs ${dep}_extralibs
@@ -839,26 +923,108 @@ check_deps(){
     done
 }
 
+#PLEX
+collect_deps(){
+    is_in $cfg $all_deps && return
+
+    if enabled ${cfg} ; then
+        [ x"$root_dep" != x"$cfg" ] && append all_deps $cfg
+        eval dep_sel="\$${cfg}_select"
+        eval dep_sgs="\$${cfg}_suggest"
+
+        for var in $dep_sel $dep_sgs ; do
+            pushvar var cfg dep_sel dep_sgs
+            cfg=$var
+            collect_deps
+            popvar var cfg dep_sel dep_sgs
+        done
+    fi
+}
+
+check_deps(){
+    check_phase=
+    do_check_deps "$@"
+    check_phase=external
+    do_check_deps "$@"
+    check_phase=
+
+    for cfg; do
+        enabled $cfg || continue
+        all_deps=
+        root_dep=$cfg
+        collect_deps $cfg
+        eval "${cfg}_deplist=\"\$all_deps\""
+        if is_external $cfg ; then
+            deplist_mak=
+            for dep in $all_deps ; do
+                is_external $dep && deplist_mak="$deplist_mak \$(OBJS-$dep)"
+            done
+            eval "${cfg}_deplist_mak=\"\$deplist_mak\""
+        fi
+        if enabled_not_external $cfg ; then
+            for dep in $all_deps ; do
+                if is_external $dep ; then
+                    eval "${cfg}_dependents=\"\$${cfg}_dependents avcodec\""
+                fi
+            done
+        fi
+    done
+}
+#PLEX
+
 print_config(){
     pfx=$1
     files=$2
     shift 2
-    map 'eval echo "$v \${$v:-no}"' "$@" |
+    map 'eval echo "$v \${$v:-no} \${${v}_dependents}"' "$@" |
     awk "BEGIN { split(\"$files\", files) }
         {
             c = \"$pfx\" toupper(\$1);
             v = \$2;
+            sub(/external/, 2, v);
             sub(/yes/, 1, v);
             sub(/no/,  0, v);
             for (f in files) {
                 file = files[f];
                 if (file ~ /\\.h\$/) {
-                    printf(\"#define %s %d\\n\", c, v) >>file;
+                    if (v == 2) {
+                        c2 = toupper(\$1);
+                        printf(\"#if defined(BUILDING_%s_EXTERNAL)\", c2) >>file;
+                        for (i = 3; i <= NF; i++)
+                            printf(\" || defined(BUILDING_%s_EXTERNAL)\", toupper(\$i)) >>file;
+                        printf(\"\n\") >>file;
+                        printf(\"#define %s 1\\n\", c) >>file;
+                        printf(\"#else\\n\") >>file;
+                        printf(\"#define %s 0\\n\", c) >>file;
+                        printf(\"#endif\\n\") >>file;
+                    } else {
+                        printf(\"#define %s %d\\n\", c, v) >>file;
+                    }
                 } else if (file ~ /\\.asm\$/) {
-                    printf(\"%%define %s %d\\n\", c, v) >>file;
+                    if (v == 2) {
+                        c2 = toupper(\$1);
+                        printf(\"%%ifdef BUILDING_%s_EXTERNAL\\n\", c2) >>file;
+                        printf(\"%%define %s 1\\n\", c) >>file;
+                        for (i = 3; i <= NF; i++) {
+                            printf(\"%%elifdef BUILDING_%s_EXTERNAL\\n\", toupper(\$i)) >>file;
+                            printf(\"%%define %s 1\\n\", c) >>file;
+                        }
+                        printf(\"%%else\\n\") >>file;
+                        printf(\"%%define %s 0\\n\", c) >>file;
+                        printf(\"%%endif\\n\") >>file;
+                    } else {
+                        printf(\"%%define %s %d\\n\", c, v) >>file;
+                    }
                 } else if (file ~ /\\.mak\$/) {
                     n = -v ? \"\" : \"!\";
-                    printf(\"%s%s=yes\\n\", n, c) >>file;
+                    e = (v == 2) ? \$1 : \"yes\";
+                    printf(\"%s%s=%s\\n\", n, c, e) >>file;
+                    n = (v == 2) ? \"\" : \"!\";
+                    printf(\"%s%s_EXTERNAL=yes\\n\", n, c) >>file;
+                    if (v == 2)
+                        printf(\"EXTERNALS+=%s\\n\", e) >>file;
+                    for (i = 3; i <= NF; i++)
+                        printf(\"OBJS-%s+=\$(OBJS-%s)\\n\", \$i, \$1) >>file;
                 } else if (file ~ /\\.texi\$/) {
                     pre = -v ? \"\" : \"@c \";
                     yesno = \$2;
@@ -874,7 +1040,9 @@ print_enabled(){
     suf=$1
     shift
     for v; do
-        enabled $v && printf "%s\n" ${v%$suf}
+        extsuf=""
+        is_external $v && extsuf="(ext)"
+        enabled $v && printf "%s%s\n" ${v%$suf} ${extsuf}
     done
 }
 
@@ -1808,6 +1976,7 @@ EXTERNAL_LIBRARY_LIST="
     $EXTERNAL_LIBRARY_VERSION3_LIST
     $EXTERNAL_LIBRARY_GPLV3_LIST
     chromaprint
+    eae
     gcrypt
     gnutls
     jni
@@ -1875,6 +2044,7 @@ EXTERNAL_LIBRARY_LIST="
     libzvbi
     lv2
     mediacodec
+    mediacodecndk
     openal
     opengl
     openssl
@@ -1970,6 +2140,7 @@ PROGRAM_LIST="
 SUBSYSTEM_LIST="
     dct
     dwt
+    eae
     error_resilience
     faan
     fast_unaligned
@@ -2436,6 +2607,7 @@ CONFIG_EXTRA="
     dnn
     dovi_rpu
     dvprofile
+    eae
     exif
     faandct
     faanidct
@@ -2726,7 +2898,7 @@ mdct_select="fft"
 mdct15_select="fft"
 me_cmp_select="fdctdsp idctdsp pixblockdsp"
 mpeg_er_select="error_resilience"
-mpegaudio_select="mpegaudiodsp mpegaudioheader"
+mpegaudio_select="mpegaudiodsp mdct mpegaudioheader"
 mpegaudiodsp_select="dct"
 mpegvideo_select="blockdsp h264chroma hpeldsp idctdsp videodsp"
 mpegvideodec_select="mpegvideo mpeg_er"
@@ -2739,7 +2911,7 @@ aac_decoder_select="adts_header mdct15 mdct mpeg4audio sinewin"
 aac_fixed_decoder_select="adts_header mdct mpeg4audio"
 aac_encoder_select="audio_frame_queue iirfilter lpc mdct sinewin"
 aac_latm_decoder_select="aac_decoder aac_latm_parser"
-ac3_decoder_select="ac3_parser ac3dsp bswapdsp fmtconvert mdct"
+ac3_decoder_select="ac3_parser ac3dsp bswapdsp fmtconvert mdct fft"
 ac3_fixed_decoder_select="ac3_parser ac3dsp bswapdsp mdct"
 ac3_encoder_select="ac3dsp audiodsp mdct me_cmp"
 ac3_fixed_encoder_select="ac3dsp audiodsp mdct me_cmp"
@@ -2993,6 +3165,8 @@ zlib_encoder_deps="zlib"
 zmbv_decoder_deps="zlib"
 zmbv_encoder_deps="zlib"
 
+aac_lc_decoder_select="$aac_decoder_select" #PLEX
+
 # hardware accelerators
 crystalhd_deps="libcrystalhd_libcrystalhd_if_h"
 cuda_deps="ffnvcodec"
@@ -3128,7 +3302,7 @@ wmv3_vdpau_hwaccel_select="vc1_vdpau_hwaccel"
 
 # hardware-accelerated codecs
 mediafoundation_deps="mftransform_h MFCreateAlignedMemoryBuffer"
-mediafoundation_extralibs="-lmfplat -lmfuuid -lole32 -lstrmiids"
+mediafoundation_extralibs="-lmfplat -lmfuuid -lole32 -loleaut32 -lstrmiids"
 omx_deps="libdl pthreads"
 omx_rpi_select="omx"
 qsv_deps="libmfx"
@@ -3145,6 +3319,8 @@ scale_cuda_filter_deps="ffnvcodec"
 scale_cuda_filter_deps_any="cuda_nvcc cuda_llvm"
 thumbnail_cuda_filter_deps="ffnvcodec"
 thumbnail_cuda_filter_deps_any="cuda_nvcc cuda_llvm"
+tonemap_cuda_filter_deps="ffnvcodec"
+tonemap_cuda_filter_deps_any="cuda_nvcc cuda_llvm"
 transpose_npp_filter_deps="ffnvcodec libnpp"
 overlay_cuda_filter_deps="ffnvcodec"
 overlay_cuda_filter_deps_any="cuda_nvcc cuda_llvm"
@@ -3169,6 +3345,7 @@ h264_mf_encoder_deps="mediafoundation"
 h264_mmal_decoder_deps="mmal"
 h264_nvenc_encoder_deps="nvenc"
 h264_nvenc_encoder_select="atsc_a53"
+h264_omx_decoder_deps="omx"
 h264_omx_encoder_deps="omx"
 h264_qsv_decoder_select="h264_mp4toannexb_bsf qsvdec"
 h264_qsv_encoder_select="atsc_a53 qsvenc"
@@ -3186,6 +3363,7 @@ hevc_mediacodec_decoder_select="hevc_mp4toannexb_bsf hevc_parser"
 hevc_mf_encoder_deps="mediafoundation"
 hevc_nvenc_encoder_deps="nvenc"
 hevc_nvenc_encoder_select="atsc_a53"
+hevc_omx_decoder_deps="omx"
 hevc_qsv_decoder_select="hevc_mp4toannexb_bsf qsvdec"
 hevc_qsv_encoder_select="hevcparse qsvenc"
 hevc_rkmpp_decoder_deps="rkmpp"
@@ -3216,6 +3394,7 @@ mpeg4_crystalhd_decoder_select="crystalhd"
 mpeg4_cuvid_decoder_deps="cuvid"
 mpeg4_mediacodec_decoder_deps="mediacodec"
 mpeg4_mmal_decoder_deps="mmal"
+mpeg4_omx_decoder_deps="omx"
 mpeg4_omx_encoder_deps="omx"
 mpeg4_v4l2m2m_decoder_deps="v4l2_m2m mpeg4_v4l2_m2m"
 mpeg4_v4l2m2m_encoder_deps="v4l2_m2m mpeg4_v4l2_m2m"
@@ -3253,7 +3432,6 @@ hevc_parser_select="hevcparse"
 mpegaudio_parser_select="mpegaudioheader"
 mpegvideo_parser_select="mpegvideo"
 mpeg4video_parser_select="h263dsp mpegvideodec qpeldsp"
-vc1_parser_select="vc1dsp"
 
 # bitstream_filters
 aac_adtstoasc_bsf_select="adts_header mpeg4audio"
@@ -3308,6 +3486,13 @@ pcm_alaw_at_encoder_select="audio_frame_queue"
 pcm_mulaw_at_encoder_deps="audiotoolbox"
 pcm_mulaw_at_encoder_select="audio_frame_queue"
 chromaprint_muxer_deps="chromaprint"
+eae_select="ac3_parser mlp_parser"
+ac3_eae_decoder_select="eae"
+ac3_eae_encoder_select="eae"
+eac3_eae_decoder_select="eae"
+eac3_eae_encoder_select="eae"
+truehd_eae_decoder_select="eae"
+mlp_eae_decoder_select="eae"
 h264_videotoolbox_encoder_deps="pthreads"
 h264_videotoolbox_encoder_select="atsc_a53 videotoolbox_encoder"
 hevc_videotoolbox_encoder_deps="pthreads"
@@ -3383,6 +3568,28 @@ libxavs_encoder_deps="libxavs"
 libxavs2_encoder_deps="libxavs2"
 libxvid_encoder_deps="libxvid"
 libzvbi_teletext_decoder_deps="libzvbi"
+aac_mf_decoder_deps="mediafoundation"
+ac3_mf_decoder_deps="mediafoundation"
+eac3_mf_decoder_deps="mediafoundation"
+mp1_mf_decoder_deps="mediafoundation"
+mp2_mf_decoder_deps="mediafoundation"
+mp3_mf_decoder_deps="mediafoundation"
+wmav1_mf_decoder_deps="mediafoundation"
+wmav2_mf_decoder_deps="mediafoundation"
+wmalossless_mf_decoder_deps="mediafoundation"
+wmapro_mf_decoder_deps="mediafoundation"
+wmavoice_mf_decoder_deps="mediafoundation"
+h264_mediacodecndk_decoder_deps="mediacodecndk"
+h264_mediacodecndk_encoder_deps="mediacodecndk"
+hevc_mediacodecndk_decoder_deps="mediacodecndk"
+mpeg2_mediacodecndk_decoder_deps="mediacodecndk"
+mpeg4_mediacodecndk_decoder_deps="mediacodecndk"
+vc1_mediacodecndk_decoder_deps="mediacodecndk"
+vp8_mediacodecndk_decoder_deps="mediacodecndk"
+vp9_mediacodecndk_decoder_deps="mediacodecndk"
+mp1_mediacodecndk_decoder_deps="mediacodecndk"
+mp2_mediacodecndk_decoder_deps="mediacodecndk"
+mp3_mediacodecndk_decoder_deps="mediacodecndk"
 vapoursynth_demuxer_deps="vapoursynth"
 videotoolbox_suggest="coreservices"
 videotoolbox_deps="corefoundation coremedia corevideo"
@@ -3763,6 +3970,8 @@ yadif_cuda_filter_deps="ffnvcodec"
 yadif_cuda_filter_deps_any="cuda_nvcc cuda_llvm"
 yadif_videotoolbox_filter_deps="metal corevideo videotoolbox"
 
+inlineass_filter_deps="avcodec libass"
+
 # examples
 avio_list_dir_deps="avformat avutil"
 avio_reading_deps="avformat avcodec avutil"
@@ -3808,6 +4017,8 @@ swresample_deps="avutil"
 swresample_suggest="libm libsoxr"
 swscale_deps="avutil"
 swscale_suggest="libm"
+
+avutil_suggest="$avutil_suggest libdl" #PLEX
 
 avcodec_extralibs="pthreads_extralibs iconv_extralibs dxva2_extralibs"
 avfilter_extralibs="pthreads_extralibs"
@@ -4052,6 +4263,8 @@ done
 
 enable $ARCH_EXT_LIST
 
+disable aac_lc_decoder # PLEX: this can only be external
+
 die_unknown(){
     echo "Unknown option \"$1\"."
     echo "See $0 --help for available options."
@@ -4153,7 +4366,7 @@ for opt do
         --enable-sdl)
             enable sdl2
         ;;
-        --enable-*=*|--disable-*=*)
+        --enable-*=*|--disable-*=*|--external-*=*)
             eval $(echo "${opt%%=*}" | sed 's/--/action=/;s/-/ thing=/')
             is_in "${thing}s" $COMPONENT_LIST || die_unknown "$opt"
             eval list=\$$(toupper $thing)_LIST
@@ -4161,6 +4374,7 @@ for opt do
             list=$(filter "$name" $list)
             [ "$list" = "" ] && warn "Option $opt did not match anything"
             test $action = enable && warn_if_gets_disabled $list
+            test $action = external && warn_if_gets_disabled $list #PLEX
             $action $list
         ;;
         --enable-yasm|--disable-yasm)
@@ -4249,6 +4463,30 @@ build the shared libraries as well. To only build the shared libraries specify
 EOF
     exit 1
 fi
+
+# Fix hwaccel autodetection
+for cfg in $HWACCEL_LIST ; do
+    if enabled $cfg ; then
+        parent_full=${cfg/%_hwaccel/_decoder}
+        parent_main=${cfg/_*/_decoder}
+        if ! is_in $parent_full $DECODER_LIST ; then
+            if ! is_in $parent_main $DECODER_LIST ; then
+                parent_main=${cfg/_*/video_decoder}
+            fi
+            if is_external $parent_main ; then
+                external $cfg
+                # void the dependency from hwaccel to decoder, we're going to do
+                # it the other way around
+                eval sel="\$${cfg}_select"
+                sel=${sel/${parent_main}/}
+                eval ${cfg}_select="\${sel}"
+            elif ! enabled_not_external $parent_main ; then
+                echo "disabling $cfg"
+                disable $cfg
+            fi
+        fi
+    fi
+done
 
 die_license_disabled() {
     enabled $1 || { enabled $v && die "$v is $1 and --enable-$1 is not specified."; }
@@ -5581,7 +5819,7 @@ case $target_os in
         SLIB_INSTALL_LINKS=
         SLIB_INSTALL_EXTRA_SHLIB='$(SLIBNAME:$(SLIBSUF)=.lib)'
         SLIB_INSTALL_EXTRA_LIB='lib$(SLIBNAME:$(SLIBSUF)=.dll.a) $(SLIBNAME_WITH_MAJOR:$(SLIBSUF)=.def)'
-        SLIB_CREATE_DEF_CMD='EXTERN_PREFIX="$(EXTERN_PREFIX)" AR="$(AR_CMD)" NM="$(NM_CMD)" $(SRC_PATH)/compat/windows/makedef $(SUBDIR)lib$(NAME).ver $(OBJS) > $$(@:$(SLIBSUF)=.def)'
+        SLIB_CREATE_DEF_CMD='EXTERN_PREFIX="$(EXTERN_PREFIX)" AR="$(AR_CMD)" NM="$(NM_CMD)" $(SRC_PATH)/compat/windows/makedef $(SUBDIR)lib$(NAME).ver $$(OBJS) > $$(@:$(SLIBSUF)=.def)'
         SHFLAGS='-shared -Wl,--out-implib,$(SUBDIR)lib$(SLIBNAME:$(SLIBSUF)=.dll.a) -Wl,--disable-auto-image-base $$(@:$(SLIBSUF)=.def)'
         enabled x86_64 && objformat="win64" || objformat="win32"
         dlltool="${cross_prefix}dlltool"
@@ -5618,7 +5856,7 @@ case $target_os in
         SLIBSUF=".dll"
         SLIBNAME_WITH_VERSION='$(SLIBPREF)$(FULLNAME)-$(LIBVERSION)$(SLIBSUF)'
         SLIBNAME_WITH_MAJOR='$(SLIBPREF)$(FULLNAME)-$(LIBMAJOR)$(SLIBSUF)'
-        SLIB_CREATE_DEF_CMD='EXTERN_PREFIX="$(EXTERN_PREFIX)" $(SRC_PATH)/compat/windows/makedef $(SUBDIR)lib$(NAME).ver $(OBJS) > $$(@:$(SLIBSUF)=.def)'
+        SLIB_CREATE_DEF_CMD='EXTERN_PREFIX="$(EXTERN_PREFIX)" $(SRC_PATH)/compat/windows/makedef $(SUBDIR)lib$(NAME).ver $$(OBJS) > $$(@:$(SLIBSUF)=.def)'
         SLIB_INSTALL_NAME='$(SLIBNAME_WITH_MAJOR)'
         SLIB_INSTALL_LINKS=
         SLIB_INSTALL_EXTRA_SHLIB='$(SLIBNAME:$(SLIBSUF)=.lib)'
@@ -6170,6 +6408,16 @@ fi
 check_cc intrinsics_neon arm_neon.h "int16x8_t test = vdupq_n_s16(0)"
 
 check_ldflags -Wl,--as-needed
+check_cflags "-fdata-sections -ffunction-sections"
+if [ "x$target_os" = "xdarwin" ]; then
+    check_ldflags -Wl,-dead_strip
+elif [ "x$target_os" = "xmingw32" ]; then
+    LINKPREFIX=_
+    enabled x86_64 && LINKPREFIX=
+    EXTLIBFLAGS="-Wl,--gc-sections -Wl,--require-defined=${LINKPREFIX}av_init_library"
+else
+    check_ldflags -Wl,--gc-sections
+fi
 check_ldflags -Wl,-z,noexecstack
 
 if ! disabled network; then
@@ -6405,7 +6653,7 @@ fi
 if enabled cuda_nvcc; then
     nvccflags="$nvccflags -ptx"
 else
-    nvccflags="$nvccflags -S -nocudalib -nocudainc --cuda-device-only -Wno-c++11-narrowing -include ${source_link}/compat/cuda/cuda_runtime.h"
+    nvccflags="$nvccflags -S -nocudalib -nocudainc --cuda-device-only -Wno-c++11-narrowing -std=c++14 -include ${source_link}/compat/cuda/cuda_runtime.h"
     check_nvcc cuda_llvm
 fi
 
@@ -6669,6 +6917,7 @@ enabled mbedtls           && { check_pkg_config mbedtls mbedtls mbedtls/x509_crt
                                check_lib mbedtls mbedtls/ssl.h mbedtls_ssl_init -lmbedtls -lmbedx509 -lmbedcrypto ||
                                die "ERROR: mbedTLS not found"; }
 enabled mediacodec        && { enabled jni || die "ERROR: mediacodec requires --enable-jni"; }
+enabled mediacodecndk     && require mediacodecndk "assert.h android/native_window.h media/NdkMediaCodec.h" AMediaCodec_createDecoderByType -lmediandk
 enabled mmal              && { check_lib mmal interface/mmal/mmal.h mmal_port_connect -lmmal_core -lmmal_util -lmmal_vc_client -lbcm_host ||
                                { ! enabled cross_compile &&
                                  add_cflags -isystem/opt/vc/include/ -isystem/opt/vc/include/interface/vmcs_host/linux -isystem/opt/vc/include/interface/vcos/pthreads -fgnu89-inline &&
@@ -6904,10 +7153,9 @@ fi
 if enabled_all opencl vaapi ; then
     if enabled opencl_drm_beignet ; then
         enable opencl_vaapi_beignet
-    else
-        check_type "CL/cl.h CL/cl_va_api_media_sharing_intel.h" "clCreateFromVA_APIMediaSurfaceINTEL_fn" &&
-            enable opencl_vaapi_intel_media
     fi
+    check_type "CL/cl.h CL/cl_va_api_media_sharing_intel.h" "clCreateFromVA_APIMediaSurfaceINTEL_fn" &&
+        enable opencl_vaapi_intel_media
 fi
 
 if enabled_all opencl dxva2 ; then
@@ -7295,6 +7543,27 @@ haiku)
     ;;
 esac
 
+# Merge hwaccels with their proper decoder.
+for cfg in $HWACCEL_LIST ; do
+    if enabled $cfg ; then
+        parent_full=${cfg/%_hwaccel/_decoder}
+        parent_main=${cfg/_*/_decoder}
+        if ! is_in $parent_full $DECODER_LIST ; then
+            if ! is_in $parent_main $DECODER_LIST ; then
+                parent_main=${cfg/_*/video_decoder}
+            fi
+            if is_external $parent_main ; then
+                external $cfg
+                eval ${parent_main}_hwaccels="\"\$${parent_main}_hwaccels ${cfg}\""
+                eval deps="\$${parent_main}_dependents"
+                deps=${deps/${cfg}/}
+                eval ${parent_main}_dependents="\${deps}"
+                eval ${cfg}_dependents="\"\$${cfg}_dependents ${parent_main}\""
+            fi
+        fi
+    fi
+done
+
 flatten_extralibs(){
     nested_entries=
     list_name=$1
@@ -7559,11 +7828,35 @@ echo "Programs:"
 print_enabled '' $PROGRAM_LIST | print_in_columns
 echo
 
-for type in decoder encoder hwaccel parser demuxer muxer protocol filter bsf indev outdev; do
+componenttypes="decoder encoder hwaccel parser demuxer muxer protocol filter bsf indev outdev"
+
+for type in $componenttypes; do
     echo "Enabled ${type}s:"
     eval list=\$$(toupper $type)_LIST
     print_enabled '_*' $list | print_in_columns
     echo
+done
+
+echo "External components and deps:"
+
+for cfg in $CONFIG_LIST       \
+           $CONFIG_EXTRA      \
+           $HAVE_LIST         \
+           $ALL_COMPONENTS    \
+; do
+    is_external $cfg || continue
+    for componenttype in $componenttypes ; do
+        if echo $cfg | grep -q $componenttype ; then
+            printf "%s" "$cfg:"
+            eval deplist="\$${cfg}_deplist"
+            for dep in $deplist ; do
+                add="(internal)"
+                is_external $dep && add=""
+                printf "%s" " $dep$add"
+            done
+            printf "\n"
+        fi
+    done
 done
 
 if test -n "$ignore_tests"; then
@@ -7682,6 +7975,7 @@ LDFLAGS=$LDFLAGS
 LDEXEFLAGS=$LDEXEFLAGS
 LDSOFLAGS=$LDSOFLAGS
 SHFLAGS=$(echo $($ldflags_filter $SHFLAGS))
+EXTLIBFLAGS=$(echo $($ldflags_filter $EXTLIBFLAGS))
 ASMSTRIPFLAGS=$ASMSTRIPFLAGS
 X86ASMFLAGS=$X86ASMFLAGS
 MSAFLAGS=$MSAFLAGS
@@ -7804,6 +8098,49 @@ print_config CONFIG_ "$config_files" $CONFIG_LIST       \
                                      $CONFIG_EXTRA      \
                                      $ALL_COMPONENTS    \
 
+EXT_OBJS_LIST="
+    armv5te
+    armv6
+    armv8
+    vfp
+    neon
+    mmx
+    x86asm
+"
+
+# Add dependencies for external components to config.mak
+for cfg in $CONFIG_LIST       \
+           $CONFIG_EXTRA      \
+           $HAVE_LIST         \
+           $ALL_COMPONENTS    \
+; do
+    cfg="${cfg#!}"
+    disabled ${cfg} && continue
+    eval deplist="\$${cfg}_deplist_mak"
+    if [ -n "$deplist" ] ; then
+        echo "OBJS-$cfg += $deplist" >> ffbuild/config.mak
+    fi
+    if is_external $cfg ; then
+        # arch.mak fixups
+        for ext in $EXT_OBJS_LIST; do
+            if enabled $ext; then
+                echo "OBJS-$cfg += \$($(toupper $ext)-OBJS-${cfg})" >> ffbuild/config.mak
+            fi
+        done
+        # used for extlib_init.c
+        eval cfg_hwaccels="\$${cfg}_hwaccels"
+        ok_hwaccels=""
+        for hwaccel in $cfg_hwaccels ; do
+            if is_external $hwaccel ; then
+                ok_hwaccels="$ok_hwaccels $hwaccel"
+                echo "OBJS-$cfg += \$(OBJS-$hwaccel)" >> ffbuild/config.mak
+            fi
+        done
+        hwaccel_list=$(echo $ok_hwaccels|sed -E "s/[^ ][A-Za-z0-9_]*/ff_&, /g"|sed -E "s/ +/ /g")
+        echo "HWACCELS-$cfg = ${hwaccel_list}" >> ffbuild/config.mak
+    fi
+done
+
 echo "#endif /* FFMPEG_CONFIG_H */" >> $TMPH
 echo "endif # FFMPEG_CONFIG_MAK" >> ffbuild/config.mak
 
@@ -7838,7 +8175,7 @@ print_enabled_components(){
     shift 3
     echo "static const $struct_name * const $name[] = {" > $TMPH
     for c in $*; do
-        if enabled $c; then
+        if enabled_not_external $c; then #PLEX
             case $name in
                 filter_list)
                     eval c=\$full_filter_name_${c%_filter}

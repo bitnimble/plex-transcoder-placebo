@@ -831,11 +831,49 @@ static int find_device(AVHWDeviceContext *ctx, VulkanDeviceSelection *select)
     }
 
     if (select->has_uuid) {
+        if (num == 1) {
+          choice = 0;
+          goto end;
+        }
         for (int i = 0; i < num; i++) {
+            av_log(ctx, AV_LOG_VERBOSE, "Found Vulkan physical device props UUID: %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n",
+                prop[i].properties.pipelineCacheUUID[0],
+                prop[i].properties.pipelineCacheUUID[1],
+                prop[i].properties.pipelineCacheUUID[2],
+                prop[i].properties.pipelineCacheUUID[3],
+                prop[i].properties.pipelineCacheUUID[4],
+                prop[i].properties.pipelineCacheUUID[5],
+                prop[i].properties.pipelineCacheUUID[6],
+                prop[i].properties.pipelineCacheUUID[7],
+                prop[i].properties.pipelineCacheUUID[8],
+                prop[i].properties.pipelineCacheUUID[9],
+                prop[i].properties.pipelineCacheUUID[10],
+                prop[i].properties.pipelineCacheUUID[11],
+                prop[i].properties.pipelineCacheUUID[12],
+                prop[i].properties.pipelineCacheUUID[13],
+                prop[i].properties.pipelineCacheUUID[14],
+                prop[i].properties.pipelineCacheUUID[15]);
+            av_log(ctx, AV_LOG_VERBOSE, "Found Vulkan IDP UUID: %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n",
+                idp[i].deviceUUID[0],
+                idp[i].deviceUUID[1],
+                idp[i].deviceUUID[2],
+                idp[i].deviceUUID[3],
+                idp[i].deviceUUID[4],
+                idp[i].deviceUUID[5],
+                idp[i].deviceUUID[6],
+                idp[i].deviceUUID[7],
+                idp[i].deviceUUID[8],
+                idp[i].deviceUUID[9],
+                idp[i].deviceUUID[10],
+                idp[i].deviceUUID[11],
+                idp[i].deviceUUID[12],
+                idp[i].deviceUUID[13],
+                idp[i].deviceUUID[14],
+                idp[i].deviceUUID[15]);
             if (!strncmp(idp[i].deviceUUID, select->uuid, VK_UUID_SIZE)) {
                 choice = i;
                 goto end;
-             }
+            }
         }
         av_log(ctx, AV_LOG_ERROR, "Unable to find device by given UUID!\n");
         err = AVERROR(ENODEV);
@@ -1600,6 +1638,23 @@ static int vulkan_device_derive(AVHWDeviceContext *ctx,
 
         dev_select.has_uuid = 1;
 
+        av_log(ctx, AV_LOG_VERBOSE, "Detected CUDA UUID: %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n",
+            dev_select.uuid[0],
+            dev_select.uuid[1],
+            dev_select.uuid[2],
+            dev_select.uuid[3],
+            dev_select.uuid[4],
+            dev_select.uuid[5],
+            dev_select.uuid[6],
+            dev_select.uuid[7],
+            dev_select.uuid[8],
+            dev_select.uuid[9],
+            dev_select.uuid[10],
+            dev_select.uuid[11],
+            dev_select.uuid[12],
+            dev_select.uuid[13],
+            dev_select.uuid[14],
+            dev_select.uuid[15]);
         return vulkan_device_create_internal(ctx, &dev_select, opts, flags);
     }
 #endif

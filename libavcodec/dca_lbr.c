@@ -1393,6 +1393,7 @@ int ff_dca_lbr_parse(DCALbrDecoder *s, uint8_t *data, DCAExssAsset *asset)
     return 0;
 }
 
+#if 0
 /**
  * Reconstruct high-frequency resolution grid from first and third grids
  */
@@ -1785,6 +1786,7 @@ int ff_dca_lbr_filter_frame(DCALbrDecoder *s, AVFrame *frame)
 
     return 0;
 }
+#endif
 
 av_cold void ff_dca_lbr_flush(DCALbrDecoder *s)
 {

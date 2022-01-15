@@ -234,11 +234,6 @@ int av_probe_input_buffer2(AVIOContext *pb, const AVInputFormat **fmt,
 
     if (!max_probe_size)
         max_probe_size = PROBE_BUF_MAX;
-    else if (max_probe_size < PROBE_BUF_MIN) {
-        av_log(logctx, AV_LOG_ERROR,
-               "Specified probe size value %u cannot be < %u\n", max_probe_size, PROBE_BUF_MIN);
-        return AVERROR(EINVAL);
-    }
 
     if (offset >= max_probe_size)
         return AVERROR(EINVAL);
@@ -254,7 +249,7 @@ int av_probe_input_buffer2(AVIOContext *pb, const AVInputFormat **fmt,
         }
     }
 
-    for (probe_size = PROBE_BUF_MIN; probe_size <= max_probe_size && !*fmt;
+    for (probe_size = FFMIN(PROBE_BUF_MIN, max_probe_size); probe_size <= max_probe_size && !*fmt;
          probe_size = FFMIN(probe_size << 1,
                             FFMAX(max_probe_size, probe_size + 1))) {
         score = probe_size < max_probe_size ? AVPROBE_SCORE_RETRY : 0;

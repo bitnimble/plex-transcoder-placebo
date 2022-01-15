@@ -1202,7 +1202,10 @@ static int opencl_device_derive(AVHWDeviceContext *hwdev,
 
 #if HAVE_OPENCL_DRM_BEIGNET
     case AV_HWDEVICE_TYPE_DRM:
+#endif
+#if HAVE_OPENCL_DRM_BEIGNET || HAVE_OPENCL_VAAPI_INTEL_MEDIA
     case AV_HWDEVICE_TYPE_VAAPI:
+#if HAVE_OPENCL_DRM_BEIGNET
         {
             // Surface mapping works via DRM PRIME fds with no special
             // initialisation required in advance.  This just finds the
@@ -1225,16 +1228,15 @@ static int opencl_device_derive(AVHWDeviceContext *hwdev,
                 err = opencl_device_create_internal(hwdev, &selector, NULL);
             }
             av_dict_free(&selector_opts);
+            if (err >= 0)
+                break;
         }
-        break;
 #endif
-
 #if HAVE_OPENCL_VAAPI_INTEL_MEDIA
         // The generic code automatically attempts to derive from all
         // ancestors of the given device, so we can ignore QSV devices here
         // and just consider the inner VAAPI device it was derived from.
-    case AV_HWDEVICE_TYPE_VAAPI:
-        {
+        if (src_ctx->type == AV_HWDEVICE_TYPE_VAAPI) {
             AVVAAPIDeviceContext *src_hwctx = src_ctx->hwctx;
             cl_context_properties props[7] = {
                 CL_CONTEXT_PLATFORM,
@@ -1257,6 +1259,7 @@ static int opencl_device_derive(AVHWDeviceContext *hwdev,
 
             err = opencl_device_create_internal(hwdev, &selector, props);
         }
+#endif
         break;
 #endif
 
@@ -2239,6 +2242,7 @@ static int opencl_map_from_qsv(AVHWFramesContext *dst_fc, AVFrame *dst,
     AVOpenCLDeviceContext   *dst_dev = dst_fc->device_ctx->hwctx;
     OpenCLDeviceContext *device_priv = dst_fc->device_ctx->internal->priv;
     OpenCLFramesContext *frames_priv = dst_fc->internal->priv;
+    const AVPixFmtDescriptor *pixdesc = av_pix_fmt_desc_get(src_fc->sw_format);
     AVOpenCLFrameDescriptor *desc;
     VASurfaceID va_surface;
     cl_mem_flags cl_flags;
@@ -2269,11 +2273,12 @@ static int opencl_map_from_qsv(AVHWFramesContext *dst_fc, AVFrame *dst,
     if (!desc)
         return AVERROR(ENOMEM);
 
-    // The cl_intel_va_api_media_sharing extension only supports NV12
-    // surfaces, so for now there are always exactly two planes.
-    desc->nb_planes = 2;
+    desc->nb_planes = av_pix_fmt_count_planes(src_fc->sw_format);
 
     for (p = 0; p < desc->nb_planes; p++) {
+        cl_image_format got_format;
+        int c;
+        int nb_comps = 0;
         desc->planes[p] =
             device_priv->clCreateFromVA_APIMediaSurfaceINTEL(
                 dst_dev->context, cl_flags, &va_surface, p, &cle);
@@ -2281,6 +2286,39 @@ static int opencl_map_from_qsv(AVHWFramesContext *dst_fc, AVFrame *dst,
             av_log(dst_fc, AV_LOG_ERROR, "Failed to create CL "
                    "image from plane %d of QSV/VAAPI surface "
                    "%#x: %d.\n", p, va_surface, cle);
+            err = AVERROR(EIO);
+            goto fail;
+        }
+
+        cle = clGetImageInfo(desc->planes[p], CL_IMAGE_FORMAT, sizeof(got_format),
+                             &got_format, NULL);
+        if (cle != CL_SUCCESS) {
+            av_log(dst_fc, AV_LOG_ERROR, "Failed to get image info: %d.\n", cle);
+            err = AVERROR(EIO);
+            goto fail;
+        }
+
+        for (c = 0; c < pixdesc->nb_components; c++) {
+            int expected_depth;
+            if (pixdesc->comp[c].plane != p)
+                continue;
+            expected_depth = pixdesc->comp[c].depth;
+            if (expected_depth < 8 ||
+                (expected_depth == 8 && got_format.image_channel_data_type != CL_UNORM_INT8) ||
+                (expected_depth > 8 && expected_depth <= 16 && got_format.image_channel_data_type != CL_UNORM_INT16) ||
+                expected_depth > 16) {
+                av_log(dst_fc, AV_LOG_ERROR, "Unexpected data type for %d-bit component: %d.\n",
+                       expected_depth, got_format.image_channel_data_type);
+                err = AVERROR(EIO);
+                goto fail;
+            }
+            nb_comps++;
+        }
+
+        if ((nb_comps == 1 && got_format.image_channel_order != CL_R) ||
+            (nb_comps == 2 && got_format.image_channel_order != CL_RG)) {
+            av_log(dst_fc, AV_LOG_ERROR, "Unexpected channel order for %d-component plane: %d.\n",
+                   nb_comps, got_format.image_channel_order);
             err = AVERROR(EIO);
             goto fail;
         }
@@ -2818,14 +2856,19 @@ static int opencl_map_to(AVHWFramesContext *hwfc, AVFrame *dst,
         if (priv->beignet_drm_mapping_usable)
             return opencl_map_from_drm_beignet(hwfc, dst, src, flags);
 #endif
-#if HAVE_OPENCL_VAAPI_BEIGNET
+#if HAVE_OPENCL_VAAPI_BEIGNET || HAVE_OPENCL_VAAPI_INTEL_MEDIA
     case AV_PIX_FMT_VAAPI:
+#if HAVE_OPENCL_VAAPI_BEIGNET
         if (priv->beignet_drm_mapping_usable)
             return opencl_map_from_vaapi(hwfc, dst, src, flags);
 #endif
 #if HAVE_OPENCL_VAAPI_INTEL_MEDIA
+        if (priv->qsv_mapping_usable)
+            return opencl_map_from_qsv(hwfc, dst, src, flags);
+#endif
+#endif
+#if HAVE_OPENCL_VAAPI_INTEL_MEDIA
     case AV_PIX_FMT_QSV:
-    case AV_PIX_FMT_VAAPI:
         if (priv->qsv_mapping_usable)
             return opencl_map_from_qsv(hwfc, dst, src, flags);
 #endif
@@ -2859,15 +2902,21 @@ static int opencl_frames_derive_to(AVHWFramesContext *dst_fc,
             return AVERROR(ENOSYS);
         break;
 #endif
-#if HAVE_OPENCL_VAAPI_BEIGNET
+#if HAVE_OPENCL_VAAPI_BEIGNET || HAVE_OPENCL_VAAPI_INTEL_MEDIA
     case AV_HWDEVICE_TYPE_VAAPI:
-        if (!priv->beignet_drm_mapping_usable)
+        if (1
+#if HAVE_OPENCL_VAAPI_BEIGNET
+            && !priv->beignet_drm_mapping_usable
+#endif
+#if HAVE_OPENCL_VAAPI_INTEL_MEDIA
+            && !priv->qsv_mapping_usable
+#endif
+            )
             return AVERROR(ENOSYS);
         break;
 #endif
 #if HAVE_OPENCL_VAAPI_INTEL_MEDIA
     case AV_HWDEVICE_TYPE_QSV:
-    case AV_HWDEVICE_TYPE_VAAPI:
         if (!priv->qsv_mapping_usable)
             return AVERROR(ENOSYS);
         break;

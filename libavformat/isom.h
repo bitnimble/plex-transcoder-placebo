@@ -27,6 +27,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "libavcodec/get_bits.h"
+#include "libavcodec/put_bits.h"
+
+#include "libavutil/dovi_meta.h"
 #include "libavutil/encryption_info.h"
 #include "libavutil/mastering_display_metadata.h"
 #include "libavutil/spherical.h"
@@ -303,6 +307,7 @@ typedef struct MOVContext {
     int decryption_key_len;
     int enable_drefs;
     int32_t movie_display_matrix[3][3]; ///< display matrix from mvhd
+    int64_t header_size;
     int have_read_mfra_size;
     uint32_t mfra_size;
     uint32_t max_stts_delta;
@@ -377,6 +382,7 @@ int ff_mov_read_esds(AVFormatContext *fc, AVIOContext *pb);
 int ff_mov_read_stsd_entries(MOVContext *c, AVIOContext *pb, int entries);
 void ff_mov_write_chan(AVIOContext *pb, int64_t channel_layout);
 
+#define MOV_DVCC_DVVC_SIZE 24
 #define FF_MOV_FLAG_MFRA_AUTO -1
 #define FF_MOV_FLAG_MFRA_DTS 1
 #define FF_MOV_FLAG_MFRA_PTS 2

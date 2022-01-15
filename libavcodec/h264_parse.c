@@ -528,18 +528,31 @@ int ff_h264_decode_extradata(const uint8_t *data, int size, H264ParamSets *ps,
  */
 int ff_h264_get_profile(const SPS *sps)
 {
-    int profile = sps->profile_idc;
+    return avpriv_h264_get_profile(sps->profile_idc, sps->constraint_set_flags);
+}
 
-    switch (sps->profile_idc) {
+/**
+ * Compute profile from profile_idc and constraint_set?_flags.
+ *
+ * @param profile_idc profile_idc field from SPS
+ * @param constraint_set_flags constraint_set_flags field from SPS
+ *
+ * @return profile as defined by FF_PROFILE_H264_*
+ */
+int avpriv_h264_get_profile(int profile_idc, int constraint_set_flags)
+{
+    int profile = profile_idc;
+
+    switch (profile_idc) {
     case FF_PROFILE_H264_BASELINE:
         // constraint_set1_flag set to 1
-        profile |= (sps->constraint_set_flags & 1 << 1) ? FF_PROFILE_H264_CONSTRAINED : 0;
+        profile |= (constraint_set_flags & 1 << 1) ? FF_PROFILE_H264_CONSTRAINED : 0;
         break;
     case FF_PROFILE_H264_HIGH_10:
     case FF_PROFILE_H264_HIGH_422:
     case FF_PROFILE_H264_HIGH_444_PREDICTIVE:
         // constraint_set3_flag set to 1
-        profile |= (sps->constraint_set_flags & 1 << 3) ? FF_PROFILE_H264_INTRA : 0;
+        profile |= (constraint_set_flags & 1 << 3) ? FF_PROFILE_H264_INTRA : 0;
         break;
     }
 

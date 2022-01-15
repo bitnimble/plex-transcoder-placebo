@@ -30,6 +30,7 @@
 #include "vc1.h"
 #include "get_bits.h"
 #include "internal.h"
+#include "startcode.h"
 
 /** The maximum number of bytes of a sequence, entry point or
  *  frame header whose values we pay any attention to */
@@ -185,7 +186,7 @@ static int vc1_parse(AVCodecParserContext *s,
         if (unesc_index >= UNESCAPED_THRESHOLD && !start_code_found) {
             while (i < buf_size) {
                 if (search_state == NO_MATCH) {
-                    i += vpc->v.vc1dsp.startcode_find_candidate(buf + i, buf_size - i);
+                    i += ff_startcode_find_candidate_c(buf + i, buf_size - i);
                     if (i < buf_size) {
                         search_state = ONE_ZERO;
                     }

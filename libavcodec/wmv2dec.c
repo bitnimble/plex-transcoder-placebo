@@ -534,6 +534,7 @@ int ff_wmv2_decode_mb(MpegEncContext *s, int16_t block[6][64])
     return 0;
 }
 
+#if CONFIG_WMV2_DECODER
 static av_cold int wmv2_decode_init(AVCodecContext *avctx)
 {
     Wmv2Context *const w = avctx->priv_data;
@@ -571,3 +572,4 @@ const AVCodec ff_wmv2_decoder = {
     .pix_fmts       = (const enum AVPixelFormat[]) { AV_PIX_FMT_YUV420P,
                                                      AV_PIX_FMT_NONE },
 };
+#endif

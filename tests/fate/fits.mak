@@ -2,7 +2,7 @@ tests/data/fits-multi.fits: TAG = GEN
 tests/data/fits-multi.fits: ffmpeg$(PROGSSUF)$(EXESUF) | tests/data
 	$(M)$(TARGET_EXEC) $(TARGET_PATH)/$< -nostdin \
         -i $(TARGET_SAMPLES)/gif/m4nb.gif \
-        -y $(TARGET_PATH)/$(@) 2>/dev/null
+        -y $(TARGET_PATH)/$(@) -nostdin 2>/dev/null
 
 #mapping of fits file formats to png filenames
 # TODO: Use an actual 64bit input file and fix the gbrp16 test on big-endian
@@ -16,7 +16,7 @@ tests/data/lena%.fits: NAME = $(map.$(@))
 tests/data/lena%.fits: ffmpeg$(PROGSSUF)$(EXESUF) | tests/data
 	$(M)$(TARGET_EXEC) $(TARGET_PATH)/$< -nostdin \
         -i $(TARGET_SAMPLES)/png1/lena-$(map.$(@)).png \
-        -y $(TARGET_PATH)/$(@) 2>/dev/null
+        -y $(TARGET_PATH)/$(@) -nostdin 2>/dev/null
 
 FATE_FITS_DEC-$(call DEMDEC, FITS, FITS) += fate-fitsdec-ext_data_min_max
 fate-fitsdec-ext_data_min_max: CMD = framecrc -i $(TARGET_SAMPLES)/fits/x0cj010ct_d0h.fit -pix_fmt gray16le -vf scale

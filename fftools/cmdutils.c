@@ -888,6 +888,13 @@ int opt_loglevel(void *optctx, const char *opt, const char *arg)
     int level = av_log_get_level();
     int cmd, i = 0;
 
+//PLEX
+    typedef void (*av_log_set_level_fn)(int);
+    av_log_set_level_fn set_level_fn = (av_log_set_level_fn) optctx;
+    if (!set_level_fn)
+        set_level_fn = &av_log_set_level;
+//PLEX
+
     av_assert0(arg);
     while (*arg) {
         token = arg;
@@ -942,7 +949,7 @@ int opt_loglevel(void *optctx, const char *opt, const char *arg)
 
 end:
     av_log_set_flags(flags);
-    av_log_set_level(level);
+    set_level_fn(level); //PLEX
     return 0;
 }
 

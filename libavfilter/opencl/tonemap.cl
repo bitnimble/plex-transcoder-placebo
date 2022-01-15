@@ -179,9 +179,11 @@ float3 map_one_pixel_rgb(float3 rgb, float peak, float average) {
     float sig_old = sig;
 
     // Scale the signal to compensate for differences in the average brightness
+    /*
     float slope = min(1.0f, sdr_avg / average);
     sig *= slope;
     peak *= slope;
+    */
 
     // Desaturate the color using a coefficient dependent on the signal level
     if (desat_param > 0.0f) {
@@ -189,7 +191,7 @@ float3 map_one_pixel_rgb(float3 rgb, float peak, float average) {
         float coeff = max(sig - 0.18f, 1e-6f) / max(sig, 1e-6f);
         coeff = native_powr(coeff, 10.0f / desat_param);
         rgb = mix(rgb, (float3)luma, (float3)coeff);
-        sig = mix(sig, luma * slope, coeff);
+//        sig = mix(sig, luma * slope, coeff);
     }
 
     sig = TONE_FUNC(sig, peak);
@@ -241,7 +243,10 @@ __kernel void tonemap(__write_only image2d_t dst1,
     float sig3 = max(c3.x, max(c3.y, c3.z));
     float sig = max(sig0, max(sig1, max(sig2, sig3)));
 
-    struct detection_result r = detect_peak_avg(util_buf, &sum_wg, sig, peak);
+    struct detection_result r;
+    r.peak = peak;
+    r.average = 1.0; // TEMP dummy
+    //r = detect_peak_avg(util_buf, &sum_wg, sig, peak);
 
     float3 c0_old = c0, c1_old = c1, c2_old = c2;
     c0 = map_one_pixel_rgb(c0, r.peak, r.average);

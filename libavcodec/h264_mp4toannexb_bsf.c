@@ -40,6 +40,7 @@ typedef struct H264BSFContext {
     uint8_t  new_idr;
     uint8_t  idr_sps_seen;
     uint8_t  idr_pps_seen;
+    uint8_t  idr_seen;
     int      extradata_parsed;
 } H264BSFContext;
 
@@ -236,6 +237,9 @@ static int h264_mp4toannexb_filter(AVBSFContext *ctx, AVPacket *opkt)
                 }
             }
 
+            if (unit_type == H264_NAL_IDR_SLICE)
+                s->idr_seen = 1;
+
             /* If this is a new IDR picture following an IDR picture, reset the idr flag.
              * Just check first_mb_in_slice to be 0 as this is the simplest solution.
              * This could be checking idr_pic_id instead, but would complexify the parsing. */
@@ -255,6 +259,11 @@ static int h264_mp4toannexb_filter(AVBSFContext *ctx, AVPacket *opkt)
                 } else {
                     count_or_copy(&out, &out_size, s->pps, s->pps_size, -1, j);
                 }
+            /* some broken files do not have proper IDR NALs, so randomly insert SPS/PPS before normal slice NALs */
+            } else if (unit_type == H264_NAL_SLICE && !s->idr_seen && !s->idr_sps_seen && !s->idr_pps_seen) {
+                if (ctx->par_out->extradata)
+                    count_or_copy(&out, &out_size, ctx->par_out->extradata,
+                                  ctx->par_out->extradata_size, -1, j);
             }
 
             count_or_copy(&out, &out_size, buf, nal_size,

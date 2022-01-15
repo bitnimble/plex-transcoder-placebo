@@ -15,10 +15,16 @@ FATE_YADIF += fate-filter-yadif-mode1
 fate-filter-yadif-mode1: CMD = framecrc -flags bitexact -idct simple -i $(TARGET_SAMPLES)/mpeg2/mpeg2_field_encoding.ts -frames:v 59 -vf yadif=1
 
 FATE_YADIF += fate-filter-yadif10
-fate-filter-yadif10: CMD = framecrc -flags bitexact -idct simple -i $(TARGET_SAMPLES)/mpeg2/mpeg2_field_encoding.ts -flags bitexact -pix_fmt yuv420p10le -frames:v 30 -vf yadif=0,scale
+fate-filter-yadif10: CMD = framecrc -flags bitexact -idct simple -i $(TARGET_SAMPLES)/mpeg2/mpeg2_field_encoding.ts -flags bitexact -pix_fmt yuv444p10le -frames:v 30 -vf scale,yadif=0
+
+FATE_YADIF += fate-filter-yadif10-nospatial
+fate-filter-yadif10-nospatial: CMD = framecrc -flags bitexact -idct simple -i $(TARGET_SAMPLES)/mpeg2/mpeg2_field_encoding.ts -flags bitexact -pix_fmt yuv444p10le -frames:v 30 -vf scale,yadif=send_frame_nospatial
 
 FATE_YADIF += fate-filter-yadif16
-fate-filter-yadif16: CMD = framecrc -flags bitexact -idct simple -i $(TARGET_SAMPLES)/mpeg2/mpeg2_field_encoding.ts -flags bitexact -pix_fmt yuv420p16le -frames:v 30 -vf yadif=0,scale
+fate-filter-yadif16: CMD = framecrc -flags bitexact -idct simple -i $(TARGET_SAMPLES)/mpeg2/mpeg2_field_encoding.ts -flags bitexact -pix_fmt yuv444p16le -frames:v 30 -vf scale,yadif=0
+
+FATE_YADIF += fate-filter-yadif16-nospatial
+fate-filter-yadif16-nospatial: CMD = framecrc -flags bitexact -idct simple -i $(TARGET_SAMPLES)/mpeg2/mpeg2_field_encoding.ts -flags bitexact -pix_fmt yuv444p16le -frames:v 30 -vf scale,yadif=send_frame_nospatial
 
 FATE_FILTER_SAMPLES-$(call FILTERDEMDEC, YADIF, MPEGTS, MPEG2VIDEO) += $(FATE_YADIF)
 
@@ -562,7 +568,7 @@ FATE_FILTER_VSYNTH-$(CONFIG_PAD_FILTER) += fate-filter-pad
 fate-filter-pad: CMD = video_filter "pad=iw*1.5:ih*1.5:iw*0.3:ih*0.2"
 
 FATE_FILTER_PP = fate-filter-pp fate-filter-pp1 fate-filter-pp2 fate-filter-pp3 fate-filter-pp4 fate-filter-pp5 fate-filter-pp6
-FATE_FILTER_VSYNTH-$(CONFIG_PP_FILTER) += $(FATE_FILTER_PP)
+FATE_FILTER_VSYNTH-$(call ALLYES, PP_FILTER MPEG4_DECODER MPEG4_ENCODER AVI_DEMUXER AVI_MUXER) += $(FATE_FILTER_PP)
 $(FATE_FILTER_PP): fate-vsynth1-mpeg4-qprd
 fate-vsynth1-mpeg4-qprd: KEEP_OVERRIDE= -keep
 

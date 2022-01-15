@@ -242,6 +242,10 @@ typedef struct MOVMuxContext {
     MOVPrftBox write_prft;
     int empty_hdlr_name;
     int movie_timescale;
+
+//PLEX
+    int video_width, video_height;
+//PLEX
 } MOVMuxContext;
 
 #define FF_MOV_FLAG_RTP_HINT              (1 <<  0)

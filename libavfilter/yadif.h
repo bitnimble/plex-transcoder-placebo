@@ -86,6 +86,9 @@ typedef struct YADIFContext {
     int current_field;  ///< YADIFCurrentField
 } YADIFContext;
 
+void ff_yadif_init(YADIFContext *s);
+
+void ff_yadif_init_aarch64(YADIFContext *yadif);
 void ff_yadif_init_x86(YADIFContext *yadif);
 
 int ff_yadif_filter_frame(AVFilterLink *link, AVFrame *frame);

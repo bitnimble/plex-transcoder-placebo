@@ -339,12 +339,25 @@ static inline int decode_simple_internal(AVCodecContext *avctx, AVFrame *frame, 
             }
         }
     }
+    if (ret >= 0 && avctx->hwaccel && avctx->hwaccel->finish_frame) {
+        ret = avctx->hwaccel->finish_frame(avctx, frame);
+        if (ret < 0)
+            got_frame = 0;
+    }
     emms_c();
     actual_got_frame = got_frame;
 
     if (avctx->codec->type == AVMEDIA_TYPE_VIDEO) {
         if (frame->flags & AV_FRAME_FLAG_DISCARD)
             got_frame = 0;
+
+        //PLEX
+        if (avctx->field_order == AV_FIELD_UNKNOWN &&
+            avctx->codec_type == AVMEDIA_TYPE_VIDEO &&
+            frame->interlaced_frame) {
+            avctx->field_order = (frame->top_field_first ? AV_FIELD_TT : AV_FIELD_BB);
+        }
+        //PLEX
     } else if (avctx->codec->type == AVMEDIA_TYPE_AUDIO) {
         uint8_t *side;
         size_t side_size;
