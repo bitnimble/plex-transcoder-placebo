@@ -1,3 +1,50 @@
+## plex-transcoder-placebo
+
+This project is a custom build of ffmpeg which contains both Plex's customisations as well as a backport of `libplacebo`. This allows for real-time shaders to be applied to any Plex video stream, to do things like realtime sharpening, enhancement, super resolution, etc.
+The current goal is to get Anime4K's mpv shaders working in Plex. You can see a sample of what that looks like [here](https://youtu.be/1ZvxHlxTyow).
+
+## Status
+
+### April 2021
+After pulling the latest PMS, it no longer works unfortunately. I've spent this time cleaning up the docker build scripts instead, which are now published [here](https://github.com/bitnimble/plex-transcoder-placebo-build).
+
+Next up is focusing on figuring out why it crashes the Docker container when PMS loads the transcoder. Some notes:
+ - It builds successfully
+ - When testing the binary manually, it works fine (both on my Linux dev box as well as inside the Plex docker container)
+ - When Plex starts up / tries to execute the transcoder, it crashes (presumably with a segfault). Not 100% sure why yet, but my suspicions is that either a binding or a codec being loaded from FFMPEG_EXTERNAL_LIBS is expecting a different release version now, so hopefully it's just a quick patch there.
+
+### March 2021
+Elden Ring came out, so no updates
+
+### January 2021
+
+Working, but very slow, and half of Plex's custom codecs (e.g. hardware accelerated h264 decoding) is broken. I'm 99% sure it's due to the crappy port that I made in the filter list code when rebasing.
+
+## Developing / building it yourself
+Want to help out?
+
+### Requirements
+- A development box that supports Docker, so pretty much anything
+- Clone the [build scripts repo](https://github.com/bitnimble/plex-transcoder-placebo-build), and then clone this repo inside of that. The folder structure should look like this:
+```
+plex-transcoder-placebo-build/
+├─ Dockerfile
+├─ build_ffmpeg.sh
+├─ build_musl_dependencies.sh
+├─ build.sh
+├─ ...
+├─ plex-transcoder-placebo/
+│  ├─ configure
+│  ├─ Makefile
+│  ├─ ...
+```
+- Run `./build.sh`
+- Hopefully, you get a successful build and a new `target` directory in the root, which should contain `ffmpeg_g` and all of the libraries as well (`libavformat.so.58` etc).
+
+I still have to do some work to pin the versions on a lot of the dependencies, so it's possible that even though it's currently working, it might not work for you. Please report any problems you find as a new Github Issue.
+
+(Original FFmpeg readme below)
+
 FFmpeg README
 =============
 
