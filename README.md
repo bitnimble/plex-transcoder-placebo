@@ -45,12 +45,15 @@ as-is.
 
 ## Configuration
 
-All optional. By default the mod handles every HDR transcode at any resolution.
+All optional. The mod rewrites supported HDR transcodes at any resolution by default. Jobs
+asking for an encoder this build does not carry, and jobs with more than one output, stay on
+the original transcoder chain unless the subtitle opt-in below applies.
 
 | Variable | Default | Effect |
 |---|---|---|
 | `PLACEBO_TONEMAP` | your Plex setting | Force a tone-mapping curve (see below). |
 | `PLACEBO_MAX_HEIGHT` | unset (no limit) | Cap the output height the mod will handle; taller jobs pass through to stock Plex. |
+| `PLACEBO_EXPERIMENTAL_SUBTITLES` | unset (disabled) | Set to `1` to allow Plex DASH video/audio alongside a separate ASS subtitle-segment output. Any other multiple-output job still passes through to stock Plex. |
 | `PLACEBO_OPTS` | – | Extra libplacebo options, e.g. `contrast_recovery=0` or `peak_detect=0` to reduce highlight clipping. |
 | `PLACEBO_DEBUG` | – | Log every decision to `/tmp/plex-placebo.log`. |
 | `PLACEBO_NO_ZEROCOPY` | – | Keep Plex's software scale instead of moving it to the GPU. |
@@ -66,6 +69,27 @@ curve the Plex UI lists works. libplacebo also offers curves Plex can't select: 
 (ITU reference, higher contrast, clips bright speculars more), `spline` (libplacebo's own
 default, a good general-purpose look), `bt.2446a`, `st2094-40`/`st2094-10` (HDR10+ dynamic
 metadata), and `auto`.
+
+## Separate subtitles
+
+`PLACEBO_EXPERIMENTAL_SUBTITLES=1` lets the mod take a DASH video/audio job that also has a
+separate ASS subtitle-segment output. Without it those jobs pass through to stock Plex,
+because Plex's ffmpeg 6.1 stops pulling the tone-mapping graph while a sparse subtitle
+output holds the scheduler, and the queued frames grow past 4 GiB. The build carries a patch
+for that (see `patches/`); the flag exists because the path has only had short playback
+tests, not extended running.
+
+That patch applies to ffmpeg 6.x only. `build.sh` reads the release out of the source it
+fetched and skips the patch from 7.0 on, where filtergraphs are scheduled on their own
+threads and cannot be starved this way. `licenses/SOURCE.txt` in the image records which of
+the two you have.
+
+**Host-kernel warning:** hardware testing on Linux 6.18.38 hit an AMD driver fault in
+`amdgpu_hmm_invalidate_gfx`. Check that your kernel carries the
+[upstream userptr/VM lifetime fix](https://github.com/torvalds/linux/commit/631849ff5d603841e74f19f4a5e30fe1f7d7cf30)
+before using this path on affected hardware; container CPU and memory limits do not contain
+a fault in the shared host GPU driver. See
+[issue #2](https://github.com/bitnimble/plex-transcoder-placebo/issues/2).
 
 ## Troubleshooting
 
@@ -91,9 +115,9 @@ means Plex shipped a new transcoder; the scheduled build picks that up automatic
 ## Licence
 
 The mod's own scripts are MIT (see `LICENSE`). The transcoder it builds is Plex's published
-GPL/LGPL ffmpeg source, unchanged apart from configure flags, and stays LGPL v2.1+. The image
-ships its licence texts and the exact source tarball it was built from under
-`/plex-placebo/licenses/`.
+GPL/LGPL ffmpeg source with the configure flags and patches applied by `build.sh`, and stays
+LGPL v2.1+. The image ships its licence texts, Plex's source tarball and whichever patches
+were applied to it under `/plex-placebo/licenses/`.
 
 ## Building locally
 

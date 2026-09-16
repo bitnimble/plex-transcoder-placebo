@@ -84,6 +84,54 @@ for a in "$@"; do
 done
 [ -n "$graph" ] || { log "no tone map in a filter graph, chaining"; chain "$@"; }
 
+# Inspect encoders and output count before rewriting anything, for the same reason the graph
+# is found first: both only fail after exec, where the chain is gone.
+prev=
+formats=0
+muxers=
+segment_format=
+encoder=
+for a in "$@"; do
+    case $prev in
+        -codec|-codec:*|-c|-c:*|-vcodec|-acodec|-scodec)
+            # The only external encoders configure enables are libopus and libvorbis, so any
+            # other lib* -- libx264, libx265, libmp3lame, libvpx-vp9 -- is absent here and
+            # would die as "Unknown encoder". Keep this pair in step with build.sh.
+            case $a in
+                libopus|libvorbis) ;;
+                lib*) encoder=$a ;;
+            esac ;;
+        # ffmpeg groups every input ahead of every output, so anything collected before an -i
+        # described that input: -f was its demuxer and -c its decoder, neither of which says
+        # what this job encodes to or muxes into.
+        -i) formats=0; muxers=; encoder= ;;
+        -f)
+            formats=$((formats + 1))
+            muxers="$muxers $a" ;;
+        -segment_format) segment_format=$a ;;
+    esac
+    prev=$a
+done
+[ -z "$encoder" ] || { log "encoder $encoder absent from this build; chaining"; chain "$@"; }
+
+# Plex's ffmpeg 6.1 pulls only the filtergraph belonging to whichever output stream has the
+# oldest timestamp, and a sparse subtitle output holds that spot for seconds at a time. The
+# libplacebo graph then never gets pulled while frames keep arriving, and its queue grows
+# past 4 GiB. Only the shape the patched build was tested against can opt back in.
+if [ "$formats" -gt 1 ]; then
+    has_dash=
+    has_segment=
+    case "$muxers " in *' dash '*) has_dash=1 ;; esac
+    case "$muxers " in *' segment '*) has_segment=1 ;; esac
+    if [ "${PLACEBO_EXPERIMENTAL_SUBTITLES:-}" = 1 ] && [ "$formats" -eq 2 ] &&
+       [ -n "$has_dash" ] && [ -n "$has_segment" ] && [ "$segment_format" = ass ]; then
+        log "experimental DASH + ASS subtitle job enabled"
+    else
+        log "multiple outputs require a supported opt-in; chaining"
+        chain "$@"
+    fi
+fi
+
 # Optional output-height gate. Unset means take every resolution; a value caps it. This is
 # for hardware where tone mapping at 4K is slower on the GPU than Plex's software path -- true
 # of small iGPUs -- so an operator there sets e.g. PLACEBO_MAX_HEIGHT=1080 to keep 4K jobs on

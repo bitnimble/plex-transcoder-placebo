@@ -199,6 +199,139 @@ case $odd_out in
     *) echo "FAIL [zerocopy]: lost the rewrite on an unrecognised segment"; fail=1;;
 esac
 
+# An encoder the build lacks, and a second output, both only fail after exec, so both have
+# to be caught here. A separate ASS subtitle output needs the explicit opt-in on top.
+for flag in -codec:0 -c:v -codec -c -vcodec; do
+    for codec in libx264 libx265 libmp3lame libvpx-vp9; do
+        guarded=$(PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder" \
+            -filter_complex "$PLEX_GRAPH" "$flag" "$codec" -crf:0 16 2>&1)
+        case $guarded in
+            *CHAINED*) echo "  ok: $flag $codec remains on stock transcoder";;
+            *) echo "FAIL: absent encoder $codec entered custom build"; fail=1;;
+        esac
+    done
+done
+for codec in libopus libvorbis; do
+    built=$(PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder" \
+        -hwaccel:0 vaapi -i movie.mkv -filter_complex "$PLEX_GRAPH" \
+        -codec:0 h264_vaapi -codec:1 "$codec" -f dash dash 2>&1)
+    case $built in
+        *libplacebo=*) echo "  ok: $codec is configured in, job still rewritten";;
+        *) echo "FAIL: chained on $codec, which this build has"; fail=1;;
+    esac
+done
+
+subs=$(PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder" \
+    -hwaccel:0 vaapi -i movie.mkv -filter_complex "$PLEX_GRAPH" \
+    -codec:0 h264_vaapi -f dash dash -map 0:3 -codec:0 ass \
+    -f segment -segment_format ass 'sub-chunk-%05d' 2>&1)
+case $subs in
+    *CHAINED*) echo "  ok: separate subtitle output remains on stock transcoder";;
+    *) echo "FAIL: subtitle segment job entered custom build"; fail=1;;
+esac
+safe=$(PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder" \
+    -hwaccel:0 vaapi -i segment -filter_complex "$PLEX_GRAPH" \
+    -metadata title=libx264 -codec:0 h264_vaapi -f dash dash 2>&1)
+case $safe in
+    *libplacebo=*) echo "  ok: VAAPI job and incidental names still rewritten";;
+    *) echo "FAIL: safe VAAPI job incorrectly chained"; fail=1;;
+esac
+
+# Plex muxes its primary HLS output with the segment muxer: one output, no subtitle stream,
+# nothing for the graph to starve on. Chaining it would drop the mod for every HLS client.
+hls=$(PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder" \
+    -hwaccel:0 vaapi -i movie.mkv -filter_complex "$PLEX_GRAPH" -codec:0 h264_vaapi \
+    -f segment -segment_format mpegts -segment_time 5 'media-%05d.ts' 2>&1)
+case $hls in
+    *libplacebo=*) echo "  ok: single-output HLS segment job still rewritten";;
+    *) echo "FAIL: single-output HLS job chained"; fail=1;;
+esac
+
+# An -f ahead of an -i names that input's demuxer, not an output.
+demux=$(PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder" \
+    -f matroska -i movie.mkv -filter_complex "$PLEX_GRAPH" -codec:0 h264_vaapi \
+    -f dash dash 2>&1)
+case $demux in
+    *libplacebo=*) echo "  ok: input demuxer -f is not counted as an output";;
+    *) echo "FAIL: input -f counted as a second output"; fail=1;;
+esac
+
+# Same trap for codecs: a -c ahead of an -i picks that input's decoder. libdav1d is a
+# decoder this build has and has no encoder at all, so reading it as one chains a job that
+# would have accelerated fine.
+for dec in libdav1d libvpx-vp9; do
+    decode=$(PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder" \
+        -c:v "$dec" -i movie.mkv -filter_complex "$PLEX_GRAPH" \
+        -codec:0 h264_vaapi -f dash dash 2>&1)
+    case $decode in
+        *libplacebo=*) echo "  ok: input decoder -c:v $dec is not read as an encoder";;
+        *) echo "FAIL: input decoder $dec chained the job"; fail=1;;
+    esac
+done
+
+# Burn-in is one output: PLEX_GRAPH overlays the subtitle stream, so it is rewritten like
+# any other single-output job.
+burn=$(PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder" \
+    -hwaccel:0 vaapi -i movie.mkv -filter_complex "$PLEX_GRAPH" \
+    -codec:0 h264_vaapi -f dash dash 2>&1)
+case $burn in
+    *libplacebo=*) echo "  ok: subtitle burn-in stays on the custom build";;
+    *) echo "FAIL: single-output burn-in job chained"; fail=1;;
+esac
+second=$(PLACEBO_TRANSCODER="$T/custom" "$T/Plex Transcoder" \
+    -filter_complex "$PLEX_GRAPH" -codec:0 h264_vaapi -f dash dash \
+    -map 0:3 -f null - 2>&1)
+case $second in
+    *CHAINED*) echo "  ok: unrecognised second output remains on stock";;
+    *) echo "FAIL: multiple-output job entered custom build"; fail=1;;
+esac
+
+for enabled in 1 0 true; do
+    subs=$(PLACEBO_EXPERIMENTAL_SUBTITLES="$enabled" PLACEBO_TRANSCODER="$T/custom" \
+        "$T/Plex Transcoder" -hwaccel:0 vaapi -i movie.mkv \
+        -filter_complex "$PLEX_GRAPH" -codec:0 h264_vaapi -f dash dash \
+        -map 0:3 -codec:0 ass -f segment -segment_format ass 'sub-%05d' 2>&1)
+    case "$enabled:$subs" in
+        1:*libplacebo=*|0:*CHAINED*|true:*CHAINED*)
+            echo "  ok: separate ASS subtitles opt-in=$enabled" ;;
+        *) echo "FAIL: unexpected subtitle opt-in result: $enabled"; fail=1 ;;
+    esac
+done
+# Plex's argv order is not a promise, so the opt-in matches the set of muxers, not a string.
+reordered=$(PLACEBO_EXPERIMENTAL_SUBTITLES=1 PLACEBO_TRANSCODER="$T/custom" \
+    "$T/Plex Transcoder" -hwaccel:0 vaapi -i movie.mkv -filter_complex "$PLEX_GRAPH" \
+    -map 0:3 -codec:0 ass -f segment -segment_format ass 'sub-%05d' \
+    -codec:0 h264_vaapi -f dash dash 2>&1)
+case $reordered in
+    *libplacebo=*) echo "  ok: opt-in accepts the subtitle output first";;
+    *) echo "FAIL: opt-in is sensitive to output order"; fail=1;;
+esac
+for codec in libx264 libx265 libmp3lame; do
+    guarded=$(PLACEBO_EXPERIMENTAL_SUBTITLES=1 PLACEBO_TRANSCODER="$T/custom" \
+        "$T/Plex Transcoder" -filter_complex "$PLEX_GRAPH" -codec:0 "$codec" \
+        -f dash dash -f segment -segment_format ass 'sub-%05d' 2>&1)
+    case $guarded in
+        *CHAINED*) echo "  ok: opt-in cannot bypass the $codec guard" ;;
+        *) echo "FAIL: opt-in bypassed the absent-encoder guard"; fail=1 ;;
+    esac
+done
+for secondary in null segment; do
+    guarded=$(PLACEBO_EXPERIMENTAL_SUBTITLES=1 PLACEBO_TRANSCODER="$T/custom" \
+        "$T/Plex Transcoder" -filter_complex "$PLEX_GRAPH" -codec:0 h264_vaapi \
+        -f dash dash -f "$secondary" -segment_format srt 'sub-%05d' 2>&1)
+    case $guarded in
+        *CHAINED*) echo "  ok: opt-in rejects untested $secondary/srt output" ;;
+        *) echo "FAIL: opt-in accepted unsupported output"; fail=1 ;;
+    esac
+done
+third=$(PLACEBO_EXPERIMENTAL_SUBTITLES=1 PLACEBO_TRANSCODER="$T/custom" \
+    "$T/Plex Transcoder" -filter_complex "$PLEX_GRAPH" -codec:0 h264_vaapi \
+    -f dash dash -f segment -segment_format ass 'sub-%05d' -f null - 2>&1)
+case $third in
+    *CHAINED*) echo "  ok: opt-in rejects a third output";;
+    *) echo "FAIL: opt-in accepted a third output"; fail=1;;
+esac
+
 [ -n "$FF" ] || echo "  (note: no libplacebo ffmpeg on PATH; graphs not replayed)"
 [ "$fail" = 0 ] && echo "PASS: all rewrite scenarios"
 exit "$fail"

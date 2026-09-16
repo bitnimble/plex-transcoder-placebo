@@ -1,6 +1,7 @@
 # Build scratch and outputs
 work/
 dist/
+__pycache__/
 
 # Research checkouts, regenerable via setup-branches.sh
 ffmpeg/

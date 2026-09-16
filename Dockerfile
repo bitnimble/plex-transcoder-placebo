@@ -9,7 +9,7 @@
 FROM --platform=linux/amd64 ubuntu:24.04 AS build
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        build-essential curl ca-certificates pkg-config nasm \
+        build-essential curl ca-certificates pkg-config nasm patch \
         libplacebo-dev libvulkan-dev libshaderc-dev libva-dev libdrm-dev \
         ocl-icd-opencl-dev libass-dev libdav1d-dev libopus-dev \
         libvorbis-dev libxml2-dev libssl-dev libzvbi-dev \
@@ -18,6 +18,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 
 WORKDIR /src
 COPY build.sh collect-libs.sh ./
+COPY patches/ ./patches/
 
 # build.sh fetches whatever Plex is currently serving, but Docker caches this layer on the
 # script's contents alone. Without the sha in the layer key, a rebuild triggered by a new

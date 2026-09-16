@@ -1,0 +1,54 @@
+Drain libplacebo graphs actively when a sparse output holds the scheduler.
+
+Plex's ffmpeg 6.1 picks the output stream with the oldest timestamp and pulls only the
+filtergraph that stream belongs to. A separate ASS subtitle output has no filtergraph, so
+it is scored by its last muxed dts, which stands still between cues and keeps winning. The
+video graph is then never pulled, while decoded frames keep being pushed into it, and
+vf_libplacebo consumes them into an unbounded internal queue that only drains when its own
+output is requested.
+
+ffmpeg 7.0 replaced this scheduler with per-filtergraph threads, which removes the
+starvation entirely: this patch neither applies nor is needed there. A failure to apply on
+a new Plex base means delete it, not port it.
+
+--- a/fftools/ffmpeg_filter.c
++++ b/fftools/ffmpeg_filter.c
+@@ -53,6 +53,7 @@
+     // true when the filtergraph contains only meta filters
+     // that do not modify the frame data
+     int is_meta;
++    int request_on_reap;
+     int disable_conversions;
+
+     const char *graph_desc;
+@@ -1691,6 +1692,13 @@
+         goto fail;
+
+     fgp->is_meta = graph_is_meta(fg->graph);
++    fgp->request_on_reap = 0;
++    for (unsigned fi = 0; fi < fg->graph->nb_filters; fi++) {
++        if (!strcmp(fg->graph->filters[fi]->filter->name, "libplacebo")) {
++            fgp->request_on_reap = 1;
++            break;
++        }
++    }
+
+     /* limit the lists of allowed formats to the ones selected, to
+      * make sure they stay the same if the filtergraph is reconfigured later */
+@@ -2168,9 +2176,14 @@
+     AVFilterContext *filter = ofp->filter;
+     FrameData *fd;
+     int ret;
++    /* A sparse subtitle output can hold choose_output()'s oldest-timestamp slot for
++     * seconds at a time, and libplacebo only drains its queue when its own output is
++     * requested, so a passive reap lets the intervening video pile up unbounded. Pull
++     * actively here, but never request frames for an output that has already finished. */
++    int flags = fgp->request_on_reap && !ost->finished ?
++                0 : AV_BUFFERSINK_FLAG_NO_REQUEST;
+
+-    ret = av_buffersink_get_frame_flags(filter, frame,
+-                                        AV_BUFFERSINK_FLAG_NO_REQUEST);
++    ret = av_buffersink_get_frame_flags(filter, frame, flags);
+     if (flush && ret == AVERROR_EOF && ofp->got_frame &&
+         ost->type == AVMEDIA_TYPE_VIDEO) {
+         ret = fg_output_frame(ofp, NULL);

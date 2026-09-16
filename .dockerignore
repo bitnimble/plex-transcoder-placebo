@@ -3,5 +3,6 @@
 *
 !build.sh
 !collect-libs.sh
+!patches
 !plex-transcoder-wrapper.sh
 !root
